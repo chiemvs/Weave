@@ -415,7 +415,7 @@ class DataOrganizer(object):
                 
                 # Add downloaded files to the preprocessor as enter the results queue
                 while True:
-                    time.sleep(20)
+                    time.sleep(30)
                     if self.results.qsize() == 0:
                         break
                     downloaded = [self.results.get() for i in range(self.results.qsize())]
@@ -427,12 +427,12 @@ class DataOrganizer(object):
             self.preprocessor.end()
 
 if __name__ == '__main__':
-    logging.basicConfig(filename='transp.log', filemode='w', level=logging.DEBUG, format='%(process)d-%(levelname)s-%(message)s')
+    logging.basicConfig(filename='siconc.log', filemode='w', level=logging.DEBUG, format='%(process)d-%(levelname)s-%(message)s')
     #d = DataOrganizer(varname = 'z500', region = get_europe(), operation = '12UTC')
-    d = DataOrganizer(varname = 'transp', region = get_europe(), operation = '24UTC')
+    #d = DataOrganizer(varname = 'transp', region = get_europe(), operation = '24UTC')
     #d = DataOrganizer(varname = 'sst', region = get_nhplus(), operation = 'mean')
     #d = DataOrganizer(varname = 't2m', region = get_europe(), operation = 'mean')
-    #d = DataOrganizer(varname = 'siconc', region = get_nhmin(), operation = 'mean')
+    d = DataOrganizer(varname = 'siconc', region = get_nhmin(), operation = 'mean')
     #d = DataOrganizer(varname = 'snowc', region = get_nhmin(), operation = '24UTC')
     #d = DataOrganizer(varname = 'swvl2', region = get_europe(), operation = 'mean')
-    d.main(start = '1981-01-01', end = '2019-09-30')
+    d.main(start = '1979-01-01', end = '2019-12-31')

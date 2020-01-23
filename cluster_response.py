@@ -112,7 +112,7 @@ def cluster_distance(diskkwds, spatcoords, nclusters: int = 5):
 # Go and test a precomputed jaccard distance?
 if __name__ == '__main__':
     logging.basicConfig(filename='responsecluster.log', filemode='w', level=logging.DEBUG, format='%(process)d-%(levelname)s-%(message)s')
-    spatcoord1, diskkwds1 = main(n_par_comps=6, quantile=95)
-    cluster_distance(diskkwds=diskkwds1, spatcoords=spatcoord1, nclusters=8)
-    spatcoord2, diskkwds2 = main(n_par_comps=6, quantile=85)
-    cluster_distance(diskkwds=diskkwds2, spatcoords=spatcoord2, nclusters=8)
+    #spatcoord1, diskkwds1 = main(n_par_comps=6, quantile=95)
+    #cluster_distance(diskkwds=diskkwds1, spatcoords=spatcoord1, nclusters=8)
+    #spatcoord2, diskkwds2 = main(n_par_comps=6, quantile=85)
+    #cluster_distance(diskkwds=diskkwds2, spatcoords=spatcoord2, nclusters=8)
