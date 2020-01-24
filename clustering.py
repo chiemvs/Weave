@@ -9,7 +9,7 @@ or a class from sklearn.cluster can be supplied (that takes a distance matrix)
 Extraction of the labels 
 """
 
-import sys
+#import sys
 import logging
 import time
 import xarray as xr
@@ -17,10 +17,10 @@ import numpy as np
 import pandas as pd
 import multiprocessing as mp
 from pathlib import Path
-from scipy.spatial.distance import jaccard
-sys.path.append('/usr/people/straaten/Documents/RGCPD/clustering')
-from clustering_spatial import binary_occurences_quantile #, skclustering
-from typing import Union, Callable
+from scipy.spatial.distance import jaccard, squareform
+#sys.path.append('/usr/people/straaten/Documents/RGCPD/clustering')
+#from clustering_spatial import binary_occurences_quantile #, skclustering
+from typing import Union, Callable, List
 from utils import nanquantile, get_corresponding_ctype
 from sklearn.metrics import pairwise_distances
 
@@ -187,6 +187,9 @@ class Clustering(object):
         
         # Let the manipulater write to it.
         manipulator.write(outarray = self.array)
+        # Reopen the memmap with reading only
+        if where == 'memmap':
+            self.array = np.memmap(tempfilepath, dtype=self.mandtype, mode='r', shape=self.manshape)
     
     def call_distance_algorithm(self, func: Callable, kwargs: dict = dict(), n_par_processes: int = 1, distmatdtype: type = np.float32) -> None:
         """
@@ -244,23 +247,40 @@ class Clustering(object):
         ondisk[:] = self.distmat
         return (self.samplecoords, storekwds)
     
-    def clustering(self):
+    def clustering(self, nclusters: List[int] = [2], clusterclass: Callable = None, args: tuple = tuple(), kwargs: dict = dict()) -> Union[xr.DataArray,np.ndarray]:
         """
         Enable DBSCAN and such things to be called with precomputed matrices. Otherwise do the hierachal spatial clustering.
+        Have a possibility to weight the samples?
+        The function returns an int16 array with two dimensions (nclusters,n_samples)
+        This potentially is an xarray with coordinates if from a previous step samplecoords were extracted and even a 3D array if flattening has taken place. When unstacking introduces Nan, the returntype is float64
         """
-        pass
-    
-    def label_and_return(self):
-        """
-        Saving the final result is better done outside this class
-        """
-        labels = np.random.randint(40,50, size = self.samplecoords.size)
-        
-        labelset = xr.DataArray(data = labels, coords = {self.samplecoords.dims[0]: self.samplecoords}, dims = self.samplecoords.dims)
-        
-        if hasattr(self, 'stackdim'): # Then we cannot just return, but we need to restack and reorder
-            labelset = labelset.unstack(self.samplecoords.dims[0]).reindex_like(self.samplefield)
+        returnarray = np.zeros((len(nclusters),self.manshape[-1]), dtype = np.int16)
+        if not clusterclass is None:
+            # The sklearn classes want a square distance matrix, and can only be called once per ncluster value
+            if not self.distmat.ndim == 2:
+                self.distmat = squareform(self.distmat)
+            for ncluster in nclusters:
+                kwargs.update({'n_clusters':ncluster, 'affinity':'precomputed'})
+                cl = clusterclass(*args, **kwargs)
+                logging.info(f'computing clusters with {cl}')
+                cl.fit(self.distmat) # weigths?
+                returnarray[nclusters.index(ncluster),:] = cl.labels_
+        else:
+            # We use the standard scipy hierarchal clustering, wants a condensed distance matix. Luckily squareform can also do the inverse
+            if not self.distmat.ndim == 1:
+                self.distmat = squareform(self.distmat)
+            import scipy.cluster.hierarchy as sch
+            logging.info(f'computing clusters with {sch} average linkage')
+            Z = sch.linkage(y = self.distmat, method = 'average')
+            returnarray[:] = sch.cut_tree(Z, n_clusters=nclusters).T
+       
+        if hasattr(self, 'samplecoords'):
+            returnarray = xr.DataArray(returnarray, dims = ('nclusters',self.samplecoords.name), coords = {'nclusters':nclusters, self.samplecoords.name: self.samplecoords})
+            if hasattr(self, 'stackdim'):
+                returnarray = returnarray.unstack(self.samplecoords.name).reindex_like(self.samplefield)
 
+        return returnarray
+    
 def jaccard_worker(inqueue: mp.Queue, readarray: mp.RawArray, readarrayshape: tuple, readarraydtype: type, writearray: mp.RawArray, writearraydtype: type) -> None:
     """
     Worker that takes messages from a queue to compute the jaccard distance between sample i and a set of other samples in the reading array
@@ -282,42 +302,77 @@ def jaccard_worker(inqueue: mp.Queue, readarray: mp.RawArray, readarrayshape: tu
             logging.info('this process is shutting down, after STOP')
             break
         else:
-            dist = np.apply_along_axis(jaccard, 0, readarray_np[:,compare_samples], **{'v':readarray_np[:,i]})
-            DIST_np[distmat_indices] = dist
-            logging.debug(f'computed {len(dist)} links for sample {i}.')
+            DIST_np[distmat_indices] = np.apply_along_axis(jaccard, 0, readarray_np[:,compare_samples], **{'v':readarray_np[:,i]})
+            logging.debug(f'computed links for sample {i}.')
 
-def cluster_distance(diskkwds, spatcoords, nclusters: int = 5):
-    """
-    Should receive kwds to read the 1d distance matrix
-    Stores a netcdf to disk with the clusters
-    """
-    import scipy.cluster.hierarchy as sch
-    opened = np.memmap(mode = 'r', **diskkwds)
-    Z = sch.linkage(y = opened, method = 'average')
-    labels = sch.cut_tree(Z, n_clusters=nclusters).squeeze()
-    da = xr.DataArray(data = labels, coords = {'latlon':spatcoords}, dims=['latlon'])
-    newfilename = diskkwds['filename'] + '.spatial.nc'
-    da.unstack('latlon').sortby(['latitude','longitude']).to_netcdf(newfilename)
-    logging.info(f'written out {newfilename}')
+def dummy_worker(inqueue: mp.Queue, readarray: mp.RawArray, readarrayshape: tuple, readarraydtype: type, writearray: mp.RawArray, writearraydtype: type) -> None:
+    DIST_np = np.frombuffer(writearray, dtype =  writearraydtype)
+    logging.info('this process has given itself access to a shared writing array')
+    if not isinstance(readarray, (np.ndarray, np.memmap)): # Make the thing numpy accesible in this process
+        readarray_np = np.frombuffer(readarray, dtype = readarraydtype).reshape(readarrayshape)
+        logging.info('this process has given itself access to a shared reading array')
+    else:
+        readarray_np = readarray
     
-#returns = skclustering(indices, mask2d=mask, clustermethodkey='AgglomerativeClustering', kwrgs={'n_clusters':8})
-# Go and test a precomputed jaccard distance?
+    while True:
+        i, compare_samples, distmat_indices = inqueue.get()
+        if i == 'STOP':
+            logging.info('this process is shutting down, after STOP')
+            break
+        else:
+            DIST_np[distmat_indices] = readarray_np[readarrayshape[0]//2 + 1,10,i]
+            time.sleep(0.2)
+            logging.debug(f'computed links for sample {i}.')
+
+def maxcorrcoef_worker(inqueue: mp.Queue, readarray: mp.RawArray, readarrayshape: tuple, readarraydtype: type, writearray: mp.RawArray, writearraydtype: type) -> None:
+    """
+    Worker that takes messages from a queue to compute linear correlation coefficients between a single sample timeseries (n,) and a set of lagged timeseries of other samples (d,n,m)
+    For each pairwise combination of samples it takes the maximum over lags d to output (m)
+    adaptation of https://waterprogramming.wordpress.com/2014/06/13/numpy-vectorized-correlation-coefficient/
+    Reshapes the reading array once if it is a shared ctype, otherwise it is on disk or copied into the memory of each worker 
+    The computation reduces the reading array along the zero-th and first dimension
+    it writes the resulting distances to non-overlapping parts of the shared triangular array. 
+    """
+    DIST_np = np.frombuffer(writearray, dtype =  writearraydtype)
+    logging.info('this process has given itself access to a shared writing array')
+    if not isinstance(readarray, (np.ndarray, np.memmap)): # Make the thing numpy accesible in this process
+        readarray_np = np.frombuffer(readarray, dtype = readarraydtype).reshape(readarrayshape)
+        logging.info('this process has given itself access to a shared reading array')
+    else:
+        readarray_np = readarray
+
+    while True:
+        i, compare_samples, distmat_indices = inqueue.get()
+        if i == 'STOP':
+            logging.info('this process is shutting down, after STOP')
+            break
+        else:
+            y = readarray_np[readarrayshape[0]//2 + 1, :, i] # Counts on symmetric lagging and an unlagged version in the middle
+            X = readarray_np[:,:,compare_samples] # (d,n,m)
+            Xm = np.nanmean(X,axis=1) # result (d,m)
+            ym = np.nanmean(y) # result (,)
+            r_num = np.nansum((X-Xm[:,np.newaxis,:])*((y-ym)[np.newaxis,:,np.newaxis]),axis=1) # Summing covariances (yi -ymean)(xi -xmean) over n
+            r_den = np.sqrt(np.nansum((X-Xm[:,np.newaxis,:])**2,axis=1)*np.nansum((y-ym)**2)) # Summing over n
+            r = r_num/r_den # result (d,m)
+            DIST_np[distmat_indices] = np.nanmax(r, axis = 0) # Maximum over d
+            logging.debug(f'computed links for sample {i}.')
+
+    
 if __name__ == '__main__':
     logging.basicConfig(filename='responsecluster.log', filemode='w', level=logging.DEBUG, format='%(process)d-%(levelname)s-%(message)s')
     siconc = xr.open_dataarray('/nobackup_1/users/straaten/ERA5/siconc/siconc_nhmin.nc', group = 'mean')[0]
     t2m = xr.open_dataarray('/nobackup_1/users/straaten/ERA5/t2m/t2m_europe.nc', group = 'mean')
     mask = siconc.sel(latitude = t2m['latitude'], longitude = t2m['longitude']).isnull()
-    #mask[mask['latitude'] < 60,:] = False
+    mask[mask['latitude'] < 60,:] = False
     siconc.close()
     t2m.close()
     self = Clustering(varname = 't2m', groupname = 'mean', varpath = Path('/nobackup_1/users/straaten/ERA5/t2m/t2m_europe.nc'))
     self.reshape_and_drop_obs(season='JJA', mask=mask)
-    self.prepare_for_distance_algorithm(where='shared', manipulator=Exceedence, kwargs={'quantile':0.85})
-    #self.call_distance_algorithm(func = pairwise_distances, kwargs= {'metric':'jaccard'}, n_par_processes = 7)
-    self.call_distance_algorithm(func = jaccard_worker, n_par_processes = 7)
-    #self.prepare_for_distance_algorithm(where=None, manipulator=Lagshift, kwargs={'lags':[-2,-1,0,1,2]})
-    #logging.basicConfig(filename='responsecluster.log', filemode='w', level=logging.DEBUG, format='%(process)d-%(levelname)s-%(message)s')
-    #spatcoord1, diskkwds1 = main(n_par_comps=6, quantile=95)
-    #cluster_distance(diskkwds=diskkwds1, spatcoords=spatcoord1, nclusters=8)
-    #spatcoord2, diskkwds2 = main(n_par_comps=6, quantile=85)
-    #cluster_distance(diskkwds=diskkwds2, spatcoords=spatcoord2, nclusters=8)
+    #self.prepare_for_distance_algorithm(where='memmap', manipulator=Lagshift, kwargs={'lags':list(range(-20,21))})
+    self.prepare_for_distance_algorithm(where=None, manipulator=Exceedence, kwargs={'quantile':0.85})
+    self.call_distance_algorithm(func = pairwise_distances, kwargs= {'metric':'jaccard'}, n_par_processes = 7)
+    #self.call_distance_algorithm(func = jaccard_worker, n_par_processes = 7)
+    #self.call_distance_algorithm(func = dummy_worker, n_par_processes = 7)
+    from sklearn.cluster import AgglomerativeClustering
+    ret = self.clustering(nclusters= [2,3,4], clusterclass= AgglomerativeClustering, kwargs = {'linkage':'average'})
+    ret2 = self.clustering(nclusters = [2,3,4])
