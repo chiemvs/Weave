@@ -21,7 +21,7 @@ from scipy.spatial.distance import jaccard, squareform
 #sys.path.append('/usr/people/straaten/Documents/RGCPD/clustering')
 #from clustering_spatial import binary_occurences_quantile #, skclustering
 from typing import Union, Callable, List
-from utils import nanquantile, get_corresponding_ctype
+from .utils import nanquantile, get_corresponding_ctype
 from sklearn.metrics import pairwise_distances
 
 class Manipulator(object):
@@ -238,16 +238,19 @@ class Clustering(object):
             # Get the shared distance matrix back to numpy
             self.distmat = np.frombuffer(DIST, dtype = distmatdtype)
 
-    def store_dist_matrix(self) -> tuple:
+    def store_dist_matrix(self, directory: Path = None) -> tuple:
         # TODO: figure out if storing this is a smart thing to do.
         # Store results on disk
-        filepath = self.storedir / ('.'.join([self.varname,'distmat','dat']))
+        if directory is not None:
+            filepath = directory / ('.'.join([self.varname,'distmat','dat']))
+        else:
+            filepath = self.storedir / ('.'.join([self.varname,'distmat','dat']))
         storekwds = {'filename':filepath, 'shape':self.distmat.shape, 'dtype':self.distmat.dtype}
         ondisk = np.memmap(mode = 'w+', **storekwds)
         ondisk[:] = self.distmat
         return (self.samplecoords, storekwds)
     
-    def clustering(self, nclusters: List[int] = [2], clusterclass: Callable = None, args: tuple = tuple(), kwargs: dict = dict()) -> Union[xr.DataArray,np.ndarray]:
+    def clustering(self, nclusters: List[int] = None, dissimheights: List[float] = None, clusterclass: Callable = None, args: tuple = tuple(), kwargs: dict = dict()) -> Union[xr.DataArray,np.ndarray]:
         """
         Enable DBSCAN and such things to be called with precomputed matrices. Otherwise do the hierachal spatial clustering.
         Have a possibility to weight the samples?
@@ -272,10 +275,10 @@ class Clustering(object):
             import scipy.cluster.hierarchy as sch
             logging.info(f'computing clusters with {sch} average linkage')
             Z = sch.linkage(y = self.distmat, method = 'average')
-            returnarray[:] = sch.cut_tree(Z, n_clusters=nclusters).T
+            returnarray[:] = sch.cut_tree(Z, n_clusters=nclusters, height=dissimheights).T # Either use the nclusters or the dissim heights
        
         if hasattr(self, 'samplecoords'):
-            returnarray = xr.DataArray(returnarray, dims = ('nclusters',self.samplecoords.name), coords = {'nclusters':nclusters, self.samplecoords.name: self.samplecoords})
+            returnarray = xr.DataArray(returnarray, dims = ('nclusters',self.samplecoords.name), coords = {'nclusters':nclusters if nclusters else dissimheights, self.samplecoords.name: self.samplecoords})
             if hasattr(self, 'stackdim'):
                 returnarray = returnarray.unstack(self.samplecoords.name).reindex_like(self.samplefield)
 
