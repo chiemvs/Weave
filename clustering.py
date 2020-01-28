@@ -253,11 +253,18 @@ class Clustering(object):
     def clustering(self, nclusters: List[int] = None, dissimheights: List[float] = None, clusterclass: Callable = None, args: tuple = tuple(), kwargs: dict = dict()) -> Union[xr.DataArray,np.ndarray]:
         """
         Enable DBSCAN and such things to be called with precomputed matrices. Otherwise do the hierachal spatial clustering.
+        This scipy implementation can be called with nclusters or with dissimilarity heights at which to cut the tree (resulting in unknown numbers of clusters)
         Have a possibility to weight the samples?
-        The function returns an int16 array with two dimensions (nclusters,n_samples)
+        The function returns an int16 array with two dimensions (nclusters or ndissimheigts,n_samples)
         This potentially is an xarray with coordinates if from a previous step samplecoords were extracted and even a 3D array if flattening has taken place. When unstacking introduces Nan, the returntype is float64
         """
-        returnarray = np.zeros((len(nclusters),self.manshape[-1]), dtype = np.int16)
+        try:
+            requestsize = len(nclusters)
+            requestname = 'dissimheight'
+        except TypeError:
+            requestsize = len(dissimheights)
+            requestname = 'nclusters'
+        returnarray = np.zeros((requestsize,self.manshape[-1]), dtype = np.int16)
         if not clusterclass is None:
             # The sklearn classes want a square distance matrix, and can only be called once per ncluster value
             if not self.distmat.ndim == 2:
@@ -278,7 +285,8 @@ class Clustering(object):
             returnarray[:] = sch.cut_tree(Z, n_clusters=nclusters, height=dissimheights).T # Either use the nclusters or the dissim heights
        
         if hasattr(self, 'samplecoords'):
-            returnarray = xr.DataArray(returnarray, dims = ('nclusters',self.samplecoords.name), coords = {'nclusters':nclusters if nclusters else dissimheights, self.samplecoords.name: self.samplecoords})
+            returnarray = xr.DataArray(returnarray, dims = (requestname,self.samplecoords.name), coords = {requestname:nclusters if nclusters else dissimheights, self.samplecoords.name: self.samplecoords}, name = 'clustid')
+            returnarray.encoding.update({'dtype': 'int16', '_FillValue': -32767})
             if hasattr(self, 'stackdim'):
                 returnarray = returnarray.unstack(self.samplecoords.name).reindex_like(self.samplefield)
 
@@ -357,7 +365,7 @@ def maxcorrcoef_worker(inqueue: mp.Queue, readarray: mp.RawArray, readarrayshape
             r_num = np.nansum((X-Xm[:,np.newaxis,:])*((y-ym)[np.newaxis,:,np.newaxis]),axis=1) # Summing covariances (yi -ymean)(xi -xmean) over n
             r_den = np.sqrt(np.nansum((X-Xm[:,np.newaxis,:])**2,axis=1)*np.nansum((y-ym)**2)) # Summing over n
             r = r_num/r_den # result (d,m)
-            DIST_np[distmat_indices] = np.nanmax(r, axis = 0) # Maximum over d
+            DIST_np[distmat_indices] = 1 - np.nanmax(r, axis = 0) # Maximum over d, 1 minus maxcor to adapt to a distance.
             logging.debug(f'computed links for sample {i}.')
 
     
