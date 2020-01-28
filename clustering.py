@@ -27,10 +27,14 @@ from sklearn.metrics import pairwise_distances
 class Manipulator(object):
     """
     Standard Manipulator, will do no computation, only write the inarray to the desired outarray location
+    Handles both numpy and xarray in the process.
     """
     def __init__(self) -> None:
         pass
     
+    def __repr__(self) -> str:
+        return(f'{self.__class__.__name__}()')
+
     def get_outshape(self, inarray: Union[np.ndarray, xr.DataArray]) -> tuple:
         return inarray.shape
     
@@ -43,14 +47,15 @@ class Manipulator(object):
             self.array = inarray.values 
         else:
             self.array = inarray
+        logging.debug(f'{self} manipulator created an internal identical copy of the array')
     
     def write(self, outarray: Union[np.ndarray, np.memmap, mp.RawArray]) -> None:
         if not isinstance(outarray, (np.ndarray, np.memmap)):
-            print('writing to shared c type')
             outarray_np = np.frombuffer(outarray, dtype=self.array.dtype)
             np.copyto(outarray_np, self.array.reshape((self.array.size,)))
         else:
             outarray[:] = self.array
+        logging.info(f'{self} manipulator has written to {type(outarray)}')
 
 class Lagshift(Manipulator):
     """
@@ -60,6 +65,7 @@ class Lagshift(Manipulator):
     """
     def __init__(self, lags: list) -> None:
         self.lags = lags
+        assert self.lags[0] == -self.lags[-1], "List of lags should be symmetric around zero"
     
     def get_outshape(self, inarray: Union[np.ndarray, xr.DataArray]) -> tuple:
         # Lag axis will eventually be inserted as the zero-th axis
@@ -73,6 +79,7 @@ class Lagshift(Manipulator):
             lag_timeaxis = ori_timeaxis - pd.Timedelta(str(lag) + 'D')
             inarray.coords['time'] = lag_timeaxis # Assign the shifted timeaxis
             self.array[self.lags.index(lag)] = inarray.reindex_like(ori_timeaxis).values
+            logging.debug(f'{self} manipulator created an internal lag {lag} shifted copy of the array')
         self.array = np.stack(self.array, axis = 0)
 
 class Exceedence(Manipulator):
@@ -94,11 +101,12 @@ class Exceedence(Manipulator):
         # nanquantile reduces the zero'th axis of the array
         qfield = nanquantile(self.array, self.quantile)
         self.array = self.array > qfield[np.newaxis,...]
+        logging.debug(f'{self} manipulator created an internal binary q{self.quantile} exceedece of the array')
 
 class Clustering(object):
     
     def __init__(self, varname: str = None, groupname: str = None, varpath: Path = None, 
-                 storedir: Path = Path('/nobackup_1/users/straaten/Clustering')) -> None:
+                 storedir: Path = None) -> None:
         """
         Possible to supply a variable name and variable path when data has not 
         been in memory from other computations yet and needs to be loaded in this class.
@@ -116,8 +124,9 @@ class Clustering(object):
     def load_obs(self) -> None:
         try:
             self.array = xr.open_dataarray(self.varpath, group = self.groupname)
+            logging.info(f'{self} loaded an xr.DataArray from disk in {self.varpath}')
         except AttributeError:
-            raise AttributeError(f'Cannot load array from disk in {self}')
+            raise AttributeError(f'{self} cannot load an xr.DataArray from disk in {self.varpath}')
     
     def reshape_and_drop_obs(self, array: xr.DataArray = None, mask: xr.DataArray = None, season: str = None) -> None:
         """
@@ -130,10 +139,11 @@ class Clustering(object):
         """
         if not array is None:
             self.array = array
+            logging.info(f'You have supplied an array to {self} which will override any previous one')
         else:
             self.load_obs()
         
-        assert self.array.ndim <= 3 and self.array.ndim >= 2
+        assert self.array.ndim <= 3 and self.array.ndim >= 2 , "Only 3D and 2D arrays are suited for clustering. Are you sure the shape is (n_features, n_samples, ...)?"
         
         if season:
             self.array = self.array.sel(time = self.array.time[self.array.time.dt.season == season]) # axis order dependent: self.array = self.array[self.array.time.dt.season == 'JJA', ...]
@@ -147,10 +157,12 @@ class Clustering(object):
         if len(sampledims) == 2:
             self.stackdim = {'_'.join(sampledims): sampledims}
             self.array = self.array.stack(self.stackdim)
+            logging.debug(f'{self} has flattened {sampledims} into one coordinate')
         
         if not mask is None:
             if mask.ndim == 2: # Flatten the mask too if applicable
                 mask = mask.stack(self.stackdim)
+            logging.debug(f'{self} will mask out {(~mask).sum().values} of {self.array.shape[-1]} samples')
             self.array = self.array[:,mask.values]
         
         # Capture the coords of data after masking.
@@ -165,6 +177,7 @@ class Clustering(object):
         """
         if not array is None:
             self.array = array
+            logging.info(f'You have directly supplied an array to {self}, potentially without reshaping and dropping samples. No coordinate restructuring will take place.')
         
         # Initialize the custom or standard manipulator and let it contain the manipulated array.
         manipulator = manipulator(*args, **kwargs)
@@ -184,12 +197,14 @@ class Clustering(object):
             self.array = mp.RawArray(self.manctype, size_or_initializer=manipulator.array.size)
         else:
             raise KeyError('Do not know what to do with the where argument. Choose: [None,"memmap","shared"]')
-        
+        logging.info(f'{self} has prepared a {where} array with dtype {self.mandtype} and shape {self.manshape} as requested by {manipulator}')
+
         # Let the manipulater write to it.
         manipulator.write(outarray = self.array)
         # Reopen the memmap with reading only
         if where == 'memmap':
             self.array = np.memmap(tempfilepath, dtype=self.mandtype, mode='r', shape=self.manshape)
+            logging.info(f'the filled memmap array exists at {tempfilepath}')
     
     def call_distance_algorithm(self, func: Callable, kwargs: dict = dict(), n_par_processes: int = 1, distmatdtype: type = np.float32) -> None:
         """
@@ -202,8 +217,9 @@ class Clustering(object):
         if func == pairwise_distances:
             # Pairwise distance uses the transformed format of the data array, namely (n_samples, n_features) 
             # It returns the square distance matrix (n_samples,n_samples)
-            assert isinstance(self.array, (np.ndarray, np.memmap))
+            assert isinstance(self.array, (np.ndarray, np.memmap)), f"Shared ctypes arrays are not directly by func={func}. Prepare differently or supply a custom func."
             kwargs.update({'n_jobs':n_par_processes})
+            logging.debug(f'{self} is about to call {func}(X = prepared array) with kwargs = {kwargs}')
             self.distmat = func(X = self.array.T, **kwargs).astype(distmatdtype)
         else:
             # These custom functions should accept the queue, a reading array, its shape, its dtype, and the writing array and its dtype, 
@@ -221,17 +237,21 @@ class Clustering(object):
                 cormatindices = slice(firstemptycell, firstemptycell + writelength) # write indices to the 1D triangular matrix.
                 firstemptycell += writelength
                 task_queue.put((i,compareindices,cormatindices))
+            logging.debug(f'{self} has filled a queue of size {ncells - 1} with tasks and writing positions in distance matrix {DIST}')
             
             # Initialize the custom functions with access to the queue, a reading array, its shape, its dtype, and the writing array and its dtype, 
             self.procs = []
+            logging.info(f'{self} is about to create {n_par_processes} processses running func = {func} with kwargs = {kwargs}. Func needs to accept the argument order and obey STOP commands')
             for i in range(n_par_processes):
                 p = mp.Process(target = func, args=(task_queue, self.array, self.manshape, self.mandtype, DIST, distmatdtype), kwargs=kwargs)
                 p.start()
                 self.procs.append(p)
                 task_queue.put(('STOP','STOP','STOP'))
+            logging.info(f'{self} started processes {[p.pid for p in self.procs]}')
             
             while task_queue.qsize() > 0:
-                time.sleep(2)
+                time.sleep(5)
+                logging.info(f'{task_queue.qsize() - n_par_processes} tasks remaining of {ncells - 1}')
             task_queue.close()
             task_queue.join_thread()
             
@@ -239,7 +259,6 @@ class Clustering(object):
             self.distmat = np.frombuffer(DIST, dtype = distmatdtype)
 
     def store_dist_matrix(self, directory: Path = None) -> tuple:
-        # TODO: figure out if storing this is a smart thing to do.
         # Store results on disk
         if directory is not None:
             filepath = directory / ('.'.join([self.varname,'distmat','dat']))
@@ -248,11 +267,12 @@ class Clustering(object):
         storekwds = {'filename':filepath, 'shape':self.distmat.shape, 'dtype':self.distmat.dtype}
         ondisk = np.memmap(mode = 'w+', **storekwds)
         ondisk[:] = self.distmat
+        logging.info(f'{self} wrote a np.memmap copy of the distance matrix at {storekwds}')
         return (self.samplecoords, storekwds)
     
     def clustering(self, nclusters: List[int] = None, dissimheights: List[float] = None, clusterclass: Callable = None, args: tuple = tuple(), kwargs: dict = dict()) -> Union[xr.DataArray,np.ndarray]:
         """
-        Enable DBSCAN and such things to be called with precomputed matrices. Otherwise do the hierachal spatial clustering.
+        Enables sklearn clustering algorithms like  DBSCAN to be called with precomputed matrices. Otherwise do the hierachal spatial clustering.
         This scipy implementation can be called with nclusters or with dissimilarity heights at which to cut the tree (resulting in unknown numbers of clusters)
         Have a possibility to weight the samples?
         The function returns an int16 array with two dimensions (nclusters or ndissimheigts,n_samples)
@@ -260,10 +280,13 @@ class Clustering(object):
         """
         try:
             requestsize = len(nclusters)
-            requestname = 'dissimheight'
+            requestname = 'nclusters' 
+            logging.debug(f'clusters {nclusters} will be asked from {clusterclass} or standard scipy hierarchy.')
         except TypeError:
             requestsize = len(dissimheights)
-            requestname = 'nclusters'
+            requestname = 'dissimheight'
+            logging.debug(f'levels {dissimheigts} will be asked from standard scipy hierarchy. {clusterclass} should be None.')
+            assert not dissimheights, "dissimheigts cannot be None when nclusters also None"
         returnarray = np.zeros((requestsize,self.manshape[-1]), dtype = np.int16)
         if not clusterclass is None:
             # The sklearn classes want a square distance matrix, and can only be called once per ncluster value
@@ -272,7 +295,7 @@ class Clustering(object):
             for ncluster in nclusters:
                 kwargs.update({'n_clusters':ncluster, 'affinity':'precomputed'})
                 cl = clusterclass(*args, **kwargs)
-                logging.info(f'computing clusters with {cl}')
+                logging.debug(f'Initialized the supplied sklearn clusterclass as {cl}')
                 cl.fit(self.distmat) # weigths?
                 returnarray[nclusters.index(ncluster),:] = cl.labels_
         else:
@@ -280,15 +303,18 @@ class Clustering(object):
             if not self.distmat.ndim == 1:
                 self.distmat = squareform(self.distmat)
             import scipy.cluster.hierarchy as sch
-            logging.info(f'computing clusters with {sch} average linkage')
+            logging.debug(f'computing clusters with {sch} average linkage')
             Z = sch.linkage(y = self.distmat, method = 'average')
             returnarray[:] = sch.cut_tree(Z, n_clusters=nclusters, height=dissimheights).T # Either use the nclusters or the dissim heights
-       
+        
+        logging.info('the clusters in sample space have been computed')
+
         if hasattr(self, 'samplecoords'):
             returnarray = xr.DataArray(returnarray, dims = (requestname,self.samplecoords.name), coords = {requestname:nclusters if nclusters else dissimheights, self.samplecoords.name: self.samplecoords}, name = 'clustid')
             returnarray.encoding.update({'dtype': 'int16', '_FillValue': -32767})
             if hasattr(self, 'stackdim'):
                 returnarray = returnarray.unstack(self.samplecoords.name).reindex_like(self.samplefield)
+                logging.debug('The previously flattened sample dimensions have been restored')
 
         return returnarray
     
@@ -314,7 +340,6 @@ def jaccard_worker(inqueue: mp.Queue, readarray: mp.RawArray, readarrayshape: tu
             break
         else:
             DIST_np[distmat_indices] = np.apply_along_axis(jaccard, 0, readarray_np[:,compare_samples], **{'v':readarray_np[:,i]})
-            logging.debug(f'computed links for sample {i}.')
 
 def dummy_worker(inqueue: mp.Queue, readarray: mp.RawArray, readarrayshape: tuple, readarraydtype: type, writearray: mp.RawArray, writearraydtype: type) -> None:
     DIST_np = np.frombuffer(writearray, dtype =  writearraydtype)
@@ -366,7 +391,6 @@ def maxcorrcoef_worker(inqueue: mp.Queue, readarray: mp.RawArray, readarrayshape
             r_den = np.sqrt(np.nansum((X-Xm[:,np.newaxis,:])**2,axis=1)*np.nansum((y-ym)**2)) # Summing over n
             r = r_num/r_den # result (d,m)
             DIST_np[distmat_indices] = 1 - np.nanmax(r, axis = 0) # Maximum over d, 1 minus maxcor to adapt to a distance.
-            logging.debug(f'computed links for sample {i}.')
 
     
 if __name__ == '__main__':
@@ -380,10 +404,10 @@ if __name__ == '__main__':
     self = Clustering(varname = 't2m', groupname = 'mean', varpath = Path('/nobackup_1/users/straaten/ERA5/t2m/t2m_europe.nc'))
     self.reshape_and_drop_obs(season='JJA', mask=mask)
     #self.prepare_for_distance_algorithm(where='memmap', manipulator=Lagshift, kwargs={'lags':list(range(-20,21))})
-    self.prepare_for_distance_algorithm(where=None, manipulator=Exceedence, kwargs={'quantile':0.85})
-    self.call_distance_algorithm(func = pairwise_distances, kwargs= {'metric':'jaccard'}, n_par_processes = 7)
+    #self.prepare_for_distance_algorithm(where=None, manipulator=Exceedence, kwargs={'quantile':0.85})
+    #self.call_distance_algorithm(func = pairwise_distances, kwargs= {'metric':'jaccard'}, n_par_processes = 7)
     #self.call_distance_algorithm(func = jaccard_worker, n_par_processes = 7)
     #self.call_distance_algorithm(func = dummy_worker, n_par_processes = 7)
-    from sklearn.cluster import AgglomerativeClustering
-    ret = self.clustering(nclusters= [2,3,4], clusterclass= AgglomerativeClustering, kwargs = {'linkage':'average'})
-    ret2 = self.clustering(nclusters = [2,3,4])
+    #from sklearn.cluster import AgglomerativeClustering
+    #ret = self.clustering(nclusters= [2,3,4], clusterclass= AgglomerativeClustering, kwargs = {'linkage':'average'})
+    #ret2 = self.clustering(nclusters = [2,3,4])
