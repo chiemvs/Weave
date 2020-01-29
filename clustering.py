@@ -250,7 +250,7 @@ class Clustering(object):
             logging.info(f'{self} started processes {[p.pid for p in self.procs]}')
             
             while task_queue.qsize() > 0:
-                time.sleep(5)
+                time.sleep(10)
                 logging.info(f'{task_queue.qsize() - n_par_processes} tasks remaining of {ncells - 1}')
             task_queue.close()
             task_queue.join_thread()
@@ -285,8 +285,8 @@ class Clustering(object):
         except TypeError:
             requestsize = len(dissimheights)
             requestname = 'dissimheight'
-            logging.debug(f'levels {dissimheigts} will be asked from standard scipy hierarchy. {clusterclass} should be None.')
-            assert not dissimheights, "dissimheigts cannot be None when nclusters also None"
+            logging.debug(f'levels {dissimheights} will be asked from standard scipy hierarchy. {clusterclass} should be None.')
+            assert (not dissimheights is None), "dissimheights cannot be None when nclusters also None"
         returnarray = np.zeros((requestsize,self.manshape[-1]), dtype = np.int16)
         if not clusterclass is None:
             # The sklearn classes want a square distance matrix, and can only be called once per ncluster value
