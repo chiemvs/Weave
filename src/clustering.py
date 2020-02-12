@@ -402,7 +402,7 @@ if __name__ == '__main__':
     siconc.close()
     t2m.close()
     self = Clustering(varname = 't2m', groupname = 'mean', varpath = Path('/nobackup_1/users/straaten/ERA5/t2m/t2m_europe.nc'))
-    self.reshape_and_drop_obs(season='JJA', mask=mask)
+    #self.reshape_and_drop_obs(season='JJA', mask=mask)
     #self.prepare_for_distance_algorithm(where='memmap', manipulator=Lagshift, kwargs={'lags':list(range(-20,21))})
     #self.prepare_for_distance_algorithm(where=None, manipulator=Exceedence, kwargs={'quantile':0.85})
     #self.call_distance_algorithm(func = pairwise_distances, kwargs= {'metric':'jaccard'}, n_par_processes = 7)

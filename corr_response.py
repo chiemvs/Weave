@@ -110,8 +110,8 @@ def make_anom(obsarray, climarray):
 ndays = 4
 rolling = False
 lag = -4
-de_trend = True
-anom = True
+de_trend = False
+anom = False
 clustid = 0
 
 # Do the potential anomalie modification (full series, highest resolutions) and aggregate both in time
@@ -172,13 +172,21 @@ d1field = xr.DataArray(corrcoefs, dims = ('latlon',), coords = {'latlon':stackla
 field = d1field.unstack('latlon').reindex_like(laggedfield)
 
 # Afterwards haversine distances etc. on the correlated regions and clustering
-from sklearn.metrics.pairwise import haversine_distances
-from .clustering import Clustering # Fails.
+from sklearn.metrics import pairwise_distances
+from src.clustering import Clustering
+from sklearn.cluster import DBSCAN
 # First should be latitude, second should be longitude (in radians)
-positives = d1field[d1field > 0]
+positives = d1field[d1field > 0.5]
 coords = np.radians(np.stack(positives.coords['latlon'].values)).astype(np.float32)
-dist = haversine_distances(coords).astype(np.float32) 
+dist = pairwise_distances(coords, metric = 'haversine').astype(np.float32) 
 
+cl = Clustering() # Could not do the masking in here because not the obs but the lats and lons are neede
+cl.prepare_for_distance_algorithm(array = coords.T)
+cl.call_distance_algorithm(func = pairwise_distances, kwargs = {'metric':'haversine'})
+cl.clustering(clusterclass = DBSCAN, kwargs = {'metric':'precomputed'}, nclusters = [2,3]) # DBSCAN does not work with n_clusters, n_clusters is the outcome.
+est = DBSCAN(metric = 'precomputed')
+est.fit(dist)
+est.labels_
 # Seperate the regions (of opposing sign?) For Z500 there does not seem to be an opposing sign. Making into anomalies does not help because correlation is already difference from its mean? So detrending, as that might inflate the correlation
 # The story is of course different if you make anomalies with respect to the doy. This removes the seasonal cycle.
 # Detrending indeed lowers the correlation
