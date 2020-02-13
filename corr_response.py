@@ -14,6 +14,7 @@ import matplotlib.pyplot as plt
 #sys.path.append('/usr/people/straaten/Documents/RGCPD/clustering')
 #from clustering_spatial import binary_occurences_quantile #, skclustering
 from scipy.stats import pearsonr, linregress
+from scipy.signal import detrend
 from statsmodels.stats.multitest import multipletests 
 
 # Some stuff with the desired precursor and spatial regions again?
@@ -110,8 +111,8 @@ def make_anom(obsarray, climarray):
 ndays = 4
 rolling = False
 lag = -4
-de_trend = False
-anom = False
+de_trend = True
+anom = True
 clustid = 0
 
 # Do the potential anomalie modification (full series, highest resolutions) and aggregate both in time
@@ -130,25 +131,9 @@ nclusters = 11
 series = t2m.groupby(clusters.sel(nclusters = nclusters)).mean('stacked_latitude_longitude')
 series.coords['clustid'] = series.coords['clustid'].astype(np.int16)
 
-# Shifting the precursor with a certain lag, and selecting a subset
-lagdays = lag if rolling else lag * ndays # Lag in days. Negative x means the values x days before the reponse variable timestamp are correlated to the response timestamp
-print(f'lagdays: {lagdays}, ndayagg: {ndays}, rolling: {rolling}, anom: {anom}, detrend: {de_trend}')
-ori_timeaxis = precursorfield.coords['time']
-lag_timeaxis = ori_timeaxis - pd.Timedelta(str(lagdays) + 'D')
-precursorfield.coords['time'] = lag_timeaxis # Assign the shifted timeaxis
-laggedfield = precursorfield.reindex_like(series)
-
-# Correlations.
-# The scipy.stats.pearsonr, can only handle two 1D timeseries (not sure about nans in the series) It returns a two side p-value, but this relies on the assumption of normality. Beta distribution based
-# Do a vectorized implementation. Outputting one corr field and then one p-value field. Perhaps immediately with multiple testing?
-# Do a looped implementation looping over NaN cells and calling scipy on the pairs. Then multiple testing from statsmodels
-
-stacklag = laggedfield.stack({'latlon':['latitude','longitude']})
-if de_trend:
-    from scipy.signal import detrend
-    stacklag = xr.DataArray(detrend(stacklag, axis = 0), dims = stacklag.dims, coords = stacklag.coords ) # linear detrending of only the summer trend.
+if de_trend: # Detrending only the summer.
     series = xr.DataArray(detrend(series, axis = 0), dims = series.dims, coords = series.coords)
-
+    
 # Plot the seasonality left in the response:
 gr = series.groupby(series.time.dt.dayofyear).mean('time')
 gr[:,clustid].plot()
@@ -159,24 +144,61 @@ plt.plot(series[:,clustid])
 plt.title(f'slope:{np.round(regresult[0], 4)}, intercept:{np.round(regresult[1], 2)}, p:{np.round(regresult[3], 2)}')
 plt.show()
 
-alpha = 0.05
-test = np.apply_along_axis(pearsonr, axis = 0, arr = stacklag, **{'y':series[:,clustid]}) # zeroth dimension is [cor, pvalue]. How does it handle nan's?
-print(f'fraction p < {alpha} before correction: {(test[1,:] < alpha).sum() / test.shape[-1]}')
-pfield = multipletests(test[1,:], alpha = alpha, method = 'fdr_bh', is_sorted = False) # Very small pvalues changes.
-print(f'fraction p < {alpha} after correction: {pfield[0].sum() / test.shape[-1]}')
-print(np.quantile(test[0,:], [0.2,0.5,0.8]))
-corrcoefs = np.ma.masked_array(data = test[0,:], mask = ~pfield[0])
+ori_timeaxis = precursorfield.coords['time'].copy()
+
+#============================ LAGGING, each time constructing a correlation series =======
+
+lags = list(range(-6,0))
+lagdays = [l if rolling else l * ndays for l in lags]  # Lag in days. Negative x means the values x days before the reponse variable timestamp are correlated to the response timestamp
+d1corrcoefs = [None] * len(lags)
+for lag in lags:
+    # Shifting the precursor with a certain lag, and selecting a subset
+    #lagdays = lag if rolling else lag * ndays # Lag in days. Negative x means the values x days before the reponse variable timestamp are correlated to the response timestamp
+    print(f'lagdays: {lagdays}, ndayagg: {ndays}, rolling: {rolling}, anom: {anom}, detrend: {de_trend}')
+    lag_timeaxis = ori_timeaxis - pd.Timedelta(str(lagdays) + 'D')
+    precursorfield.coords['time'] = lag_timeaxis # Assign the shifted timeaxis
+    laggedfield = precursorfield.reindex_like(series)
+    
+    # Correlations.
+    # The scipy.stats.pearsonr, can only handle two 1D timeseries (not sure about nans in the series) It returns a two side p-value, but this relies on the assumption of normality. Beta distribution based
+    # Do a vectorized implementation. Outputting one corr field and then one p-value field. Perhaps immediately with multiple testing?
+    # Do a looped implementation looping over NaN cells and calling scipy on the pairs. Then multiple testing from statsmodels
+    
+    stacklag = laggedfield.stack({'latlon':['latitude','longitude']})
+    if de_trend:
+        stacklag = xr.DataArray(detrend(stacklag, axis = 0), dims = stacklag.dims, coords = stacklag.coords ) # linear detrending of only the summer trend.
+    
+    alpha = 0.05
+    test = np.apply_along_axis(pearsonr, axis = 0, arr = stacklag, **{'y':series[:,clustid]}) # zeroth dimension is [cor, pvalue]. How does it handle nan's?
+    print(f'fraction p < {alpha} before correction: {(test[1,:] < alpha).sum() / test.shape[-1]}')
+    pfield = multipletests(test[1,:], alpha = alpha, method = 'fdr_bh', is_sorted = False) # Very small pvalues changes.
+    print(f'fraction p < {alpha} after correction: {pfield[0].sum() / test.shape[-1]}')
+    print(np.quantile(test[0,:], [0.2,0.5,0.8]))
+    d1corrcoefs[lags.index(lag)] = np.ma.masked_array(data = test[0,:], mask = ~pfield[0])
 
 # Plot which cells are significant.
-d1field = xr.DataArray(corrcoefs, dims = ('latlon',), coords = {'latlon':stacklag.coords['latlon']})
-field = d1field.unstack('latlon').reindex_like(laggedfield)
+d1fields = xr.DataArray(np.ma.stack(d1corrcoefs), dims = ('lagdays','latlon',), coords = {'lagdays':lagdays,'latlon':stacklag.coords['latlon']}, name = 'corcor')
+fields = d1fields.unstack('latlon').reindex_like(laggedfield)
+
+
+
+#===== For now just skip the clustering. Just group the positive and negative values.
+np.apply_along_axis(lambda a: a[a>0].mean(), axis = 1, arr = d1fields) # Mean correlation of the positive field at each lag.
+plt.plot(lagdays,np.apply_along_axis(lambda a: a[a>0].mean(), axis = 1, arr = d1fields))
+plt.title('average strength of positively correlated regions')
+plt.show()
+
+plt.plot(lagdays,np.apply_along_axis(lambda a: a[a<0].mean(), axis = 1, arr = d1fields))
+plt.title('average strength of negatively correlated regions')
+plt.show()
+
 
 # Afterwards haversine distances etc. on the correlated regions and clustering
 from sklearn.metrics import pairwise_distances
 from src.clustering import Clustering
 from sklearn.cluster import DBSCAN
 # First should be latitude, second should be longitude (in radians)
-positives = d1field[d1field > 0.5]
+positives = d1field[d1field > 0]
 coords = np.radians(np.stack(positives.coords['latlon'].values)).astype(np.float32)
 dist = pairwise_distances(coords, metric = 'haversine').astype(np.float32) 
 
@@ -184,7 +206,7 @@ cl = Clustering() # Could not do the masking in here because not the obs but the
 cl.prepare_for_distance_algorithm(array = coords.T)
 cl.call_distance_algorithm(func = pairwise_distances, kwargs = {'metric':'haversine'})
 cl.clustering(clusterclass = DBSCAN, kwargs = {'metric':'precomputed'}, nclusters = [2,3]) # DBSCAN does not work with n_clusters, n_clusters is the outcome.
-est = DBSCAN(metric = 'precomputed')
+est = DBSCAN(metric = 'precomputed', eps=700, min_samples=10) # Weighting? distance_eps=700, min_area_in_degrees2=2
 est.fit(dist)
 est.labels_
 # Seperate the regions (of opposing sign?) For Z500 there does not seem to be an opposing sign. Making into anomalies does not help because correlation is already difference from its mean? So detrending, as that might inflate the correlation
