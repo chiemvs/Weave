@@ -16,10 +16,14 @@ NPROC = sys.argv[4]
 sys.path.append(PACKAGEDIR)
 
 from Weave.src.processing import ClimateComputer
+from Weave.src.processing import AnomComputer
 
 if __name__ == '__main__':
     logging.basicConfig(filename= OBSDIR / 'testclimate.log', filemode='w', level=logging.DEBUG, format='%(process)d-%(relativeCreated)d-%(message)s')
-    cc = ClimateComputer(datapath = OBSDIR / 'siconc_nhmin.nc', group = 'mean', shared = False)
+    cc = ClimateComputer(datapath = OBSDIR / 't2m_europe.nc', group = 'mean', share_input = True)
 
-    test = cc.compute(nprocs = int(NPROC))
+    clim = cc.compute(nprocs = int(NPROC))
+    
+    ac = AnomComputer(datapath = OBSDIR / 't2m_europe.nc', group = 'mean', share_input = True, climate = clim)
+    anom = ac.compute(nprocs = int(NPROC))
 
