@@ -55,14 +55,14 @@ class CDSDownloader(object):
         Translation table between ERA5 storage, formats in the CDS and my own variable names and storage format
         Evaporation from transformation has an ERA-Land issue and is stored under a different alias 
         """
-        self.era_formats = pd.DataFrame(data = {'variable':['geopotential','sea_ice_cover','sea_surface_temperature','2m_temperature', 'evaporation_from_bare_soil', 'snow_cover','volumetric_soil_water_layer_1', 'volumetric_soil_water_layer_2', 'volumetric_soil_water_layer_3', 'volumetric_soil_water_layer_4',],
-                                                'pressure_level':[500,None,None,None,None,None,None,None,None,None],
-                                                'setname':['reanalysis-era5-pressure-levels','reanalysis-era5-single-levels','reanalysis-era5-single-levels','reanalysis-era5-single-levels','reanalysis-era5-land','reanalysis-era5-land','reanalysis-era5-land','reanalysis-era5-land','reanalysis-era5-land','reanalysis-era5-land'],
-                                                'spacing':[0.25,0.25,0.25,0.25,0.1,0.1,0.1,0.1,0.1,0.1],
-                                                'timevariable':['dataTime','dataTime','dataTime','dataTime','endStep','forecastTime','dataTime','dataTime','dataTime','dataTime'], # The relevant grib parameter in the files, depends on accumulated variable and ERA-Land or not
-                                                'datatype':['i2','i1','i2','i2','i2','i1','i1','i1','i1','i1'],
-                                                'scale_factor':[10,0.01,0.01,0.02,0.000005,None,0.01,0.01,0.01,0.01],
-                                                }, index = pd.Index(['z500','siconc','sst','t2m','transp','snowc','swvl1','swvl2','swvl3','swvl4'], name = 'varname'))
+        self.era_formats = pd.DataFrame(data = {'variable':['geopotential','geopotential','sea_ice_cover','sea_surface_temperature','2m_temperature', 'evaporation_from_bare_soil', 'snow_cover','volumetric_soil_water_layer_1', 'volumetric_soil_water_layer_2', 'volumetric_soil_water_layer_3', 'volumetric_soil_water_layer_4','total_cloud_cover',],
+                                                'pressure_level':[500,300,None,None,None,None,None,None,None,None,None,None],
+                                                'setname':['reanalysis-era5-pressure-levels','reanalysis-era5-pressure-levels','reanalysis-era5-single-levels','reanalysis-era5-single-levels','reanalysis-era5-single-levels','reanalysis-era5-land','reanalysis-era5-land','reanalysis-era5-land','reanalysis-era5-land','reanalysis-era5-land','reanalysis-era5-land','reanalysis-era5-single-levels',],
+                                                'spacing':[0.25,0.25,0.25,0.25,0.25,0.1,0.1,0.1,0.1,0.1,0.1,0.25],
+                                                'timevariable':['dataTime','dataTime','dataTime','dataTime','dataTime','endStep','forecastTime','dataTime','dataTime','dataTime','dataTime','dataTime',], # The relevant grib parameter in the files, depends on accumulated variable and ERA-Land or not
+                                                'datatype':['i2','i2','i1','i2','i2','i2','i1','i1','i1','i1','i1','i1'],
+                                                'scale_factor':[10,10,0.01,0.01,0.02,0.000005,None,0.01,0.01,0.01,0.01,None],
+                                                }, index = pd.Index(['z500','z300','siconc','sst','t2m','transp','snowc','swvl1','swvl2','swvl3','swvl4','tcc'], name = 'varname'))
         self.era_formats['fill_value'] = self.era_formats['datatype'].apply(lambda s: nc.default_fillvals[s])
         # I need to add my encoding like fill_value and scaling factors and such
     
@@ -411,7 +411,7 @@ class DataOrganizer(object):
             to_download = dif.difference(foundrawdates)
             if not to_download.empty:
                 self.downloader.create_requests_and_populate_queue(downloaddates=to_download, request_kwds = {'varname':self.varname, 'region':self.region,'rawdir':self.rawdir})
-                self.results = self.downloader.start_queue(n_par_requests=4)
+                self.results = self.downloader.start_queue(n_par_requests=5)
                 
                 # Add downloaded files to the preprocessor as enter the results queue
                 while True:
@@ -427,12 +427,14 @@ class DataOrganizer(object):
             self.preprocessor.end()
 
 if __name__ == '__main__':
-    logging.basicConfig(filename='swvl1.log', filemode='w', level=logging.DEBUG, format='%(process)d-%(levelname)s-%(message)s')
+    logging.basicConfig(filename='z300.log', filemode='w', level=logging.DEBUG, format='%(process)d-%(levelname)s-%(message)s')
     #d = DataOrganizer(varname = 'z500', region = get_europe(), operation = '12UTC')
+    d = DataOrganizer(varname = 'z300', region = get_europe(), operation = '12UTC')
     #d = DataOrganizer(varname = 'transp', region = get_europe(), operation = '24UTC')
     #d = DataOrganizer(varname = 'sst', region = get_nhplus(), operation = 'mean')
     #d = DataOrganizer(varname = 't2m', region = get_europe(), operation = 'mean')
     #d = DataOrganizer(varname = 'siconc', region = get_nhmin(), operation = 'mean')
     #d = DataOrganizer(varname = 'snowc', region = get_nhmin(), operation = '24UTC')
-    d = DataOrganizer(varname = 'swvl1', region = get_europe(), operation = 'mean')
-    d.main(start = '1981-01-01', end = '2019-09-30')
+    #d = DataOrganizer(varname = 'swvl1', region = get_europe(), operation = 'mean')
+    #d = DataOrganizer(varname = 'tcc', region = get_europe(), operation = 'mean')
+    d.main(start = '1979-01-01', end = '2019-12-31')
