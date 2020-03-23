@@ -7,4 +7,4 @@
 #SBATCH --output=../../python_%j.out
 #SBATCH --error=../../python_%j.err
 
-./start.sh ../requirements.txt 30 ./testclimate.py
+./start.sh ../requirements.txt 30 ./testclimate.py $HOME/ERA5 $HOME/processed
