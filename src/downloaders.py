@@ -15,36 +15,10 @@ import logging
 import multiprocessing as mp
 import time
 from pathlib import Path
-from collections import namedtuple, OrderedDict
+from collections import OrderedDict
 from typing import Tuple, List, Dict
-
-Region = namedtuple("Region", ["name", "latmax","lonmin", "latmin", "lonmax"])
-
-def get_europe() -> Region:
-    """
-    This should be interpreted as the box with the midpoints of the bounding gridcells.
-    """
-    return(Region("europe", 75, -30, 30, 40))
-
-def get_nhplus() -> Region:
-    """
-    This is the full northern hemisphere plus a (sub)tropical part of the sourthern hemisphere.
-    """
-    return(Region("nhplus", 90, -180, -40, 180))
-
-def get_nhmin() -> Region:
-    """
-    This is the part of the northern hemisphere experiencing snow cover and sea ice.
-    """
-    return(Region("nhmin", 90, -180, 30, 180))
-
-standard_dimensions = {'time':   {'encoding':{'datatype':'i4', 'fill_value':nc.default_fillvals['i4']},
-                       'attrs':{'units':'days since 1900-01-01 00:00:00', 'calendar':'standard', },
-                        'size':None},
-            'latitude': {'encoding':{'datatype':'f4', 'fill_value':nc.default_fillvals['f4']},
-                        'attrs':{'units':'degrees_north'}},
-            'longitude':{'encoding':{'datatype':'f4', 'fill_value':nc.default_fillvals['f4']},
-                        'attrs':{'units':'degrees_east'}},}
+from .inputoutput import Writer, variable_formats
+from .utils import Region
 
 # Construction that downloads raw files (in parallel)
 # Supply a region object, variable name, raw-data-folder, 
@@ -55,16 +29,13 @@ class CDSDownloader(object):
         Translation table between ERA5 storage, formats in the CDS and my own variable names and storage format
         Evaporation from transformation has an ERA-Land issue and is stored under a different alias 
         """
-        self.era_formats = pd.DataFrame(data = {'variable':['geopotential','geopotential','sea_ice_cover','sea_surface_temperature','2m_temperature', 'evaporation_from_bare_soil', 'snow_cover','volumetric_soil_water_layer_1', 'volumetric_soil_water_layer_2', 'volumetric_soil_water_layer_3', 'volumetric_soil_water_layer_4','total_cloud_cover',],
-                                                'pressure_level':[500,300,None,None,None,None,None,None,None,None,None,None],
-                                                'setname':['reanalysis-era5-pressure-levels','reanalysis-era5-pressure-levels','reanalysis-era5-single-levels','reanalysis-era5-single-levels','reanalysis-era5-single-levels','reanalysis-era5-land','reanalysis-era5-land','reanalysis-era5-land','reanalysis-era5-land','reanalysis-era5-land','reanalysis-era5-land','reanalysis-era5-single-levels',],
-                                                'spacing':[0.25,0.25,0.25,0.25,0.25,0.1,0.1,0.1,0.1,0.1,0.1,0.25],
-                                                'timevariable':['dataTime','dataTime','dataTime','dataTime','dataTime','endStep','forecastTime','dataTime','dataTime','dataTime','dataTime','dataTime',], # The relevant grib parameter in the files, depends on accumulated variable and ERA-Land or not
-                                                'datatype':['i2','i2','i1','i2','i2','i2','i1','i1','i1','i1','i1','i1'],
-                                                'scale_factor':[10,10,0.01,0.01,0.02,0.000005,None,0.01,0.01,0.01,0.01,None],
-                                                }, index = pd.Index(['z500','z300','siconc','sst','t2m','transp','snowc','swvl1','swvl2','swvl3','swvl4','tcc'], name = 'varname'))
-        self.era_formats['fill_value'] = self.era_formats['datatype'].apply(lambda s: nc.default_fillvals[s])
-        # I need to add my encoding like fill_value and scaling factors and such
+        self.era_formats = pd.DataFrame(data = {
+            'variable':['geopotential','geopotential','sea_ice_cover','sea_surface_temperature','2m_temperature', 'evaporation_from_bare_soil', 'snow_cover','volumetric_soil_water_layer_1', 'volumetric_soil_water_layer_2', 'volumetric_soil_water_layer_3', 'volumetric_soil_water_layer_4','total_cloud_cover',],
+            'pressure_level':[500,300,None,None,None,None,None,None,None,None,None,None],
+            'setname':['reanalysis-era5-pressure-levels','reanalysis-era5-pressure-levels','reanalysis-era5-single-levels','reanalysis-era5-single-levels','reanalysis-era5-single-levels','reanalysis-era5-land','reanalysis-era5-land','reanalysis-era5-land','reanalysis-era5-land','reanalysis-era5-land','reanalysis-era5-land','reanalysis-era5-single-levels',],
+            'timevariable':['dataTime','dataTime','dataTime','dataTime','dataTime','endStep','forecastTime','dataTime','dataTime','dataTime','dataTime','dataTime',], # The relevant grib parameter in the files, depends on accumulated variable and ERA-Land or not
+            }, index = pd.Index(['z500','z300','siconc','sst','t2m','transp','snowc','swvl1','swvl2','swvl3','swvl4','tcc'], name = 'varname'))
+        self.era_formats = self.era_formats.join(variable_formats)
     
     def create_requests_and_populate_queue(self, downloaddates: pd.DatetimeIndex, request_kwds: dict) -> list:
         """
@@ -137,7 +108,7 @@ class PreProcessor(object):
     Construction that reworks the raw hourly data to daily. Not parallel, because shared file access to the goal file is hard to do.
     For variables accumulated over 24 hrs only the last timestep needs to be read.
     """
-    def __init__(self, operation: str, ncvarname: str, datapath: Path, encoding: pd.Series) -> None:
+    def __init__(self, operation: str, ncvarname: str, datapath: Path, encoding: pd.Series, region: Region) -> None:
         """
         Operation determines what is done on the grib file containing the timesteps of that day
         to form the single field that will be written for a day.
@@ -147,6 +118,7 @@ class PreProcessor(object):
         self.ncvarname = ncvarname
         self.datapath = datapath
         self.encoding = encoding # Dataframe defined in the downloader class, subset series for the variable.
+        self.writer = Writer(datapath= self.datapath, varname = self.encoding.name, groupname = self.operation, ncvarname = self.ncvarname, region = region)
 
     def add_to_preprocessing_queue(self, unprocessed_dates: pd.DatetimeIndex, unprocessed_paths: List[Path]) -> None:
         """
@@ -271,15 +243,9 @@ class PreProcessor(object):
                     stacked_array = np.ma.stack(content.values(), axis = 0)
                     operation_method = getattr(stacked_array, self.operation)
                     dayfield = operation_method(axis = 0)
+
+                self.writer.append_one_day(writedate= writedate, dayfield= dayfield, index= len(presentdates), units= units)
                 
-                with nc.Dataset(self.datapath, mode='a') as ds:
-                    # Start appending along the time axis
-                    ds[self.operation][self.ncvarname][len(presentdates),:,:] = dayfield
-                    ds[self.operation]['time'][len(presentdates)] = nc.date2num(writedate, units = ds[self.operation]['time'].units, calendar = ds[self.operation]['time'].calendar)
-                    logging.debug(f'succesfully appended {date} to the netcdf')
-                    
-                    if not hasattr(ds[self.operation][self.ncvarname], 'units'):
-                        setattr(ds[self.operation][self.ncvarname], 'units',units)
 
 class DataOrganizer(object):
     """
@@ -304,50 +270,11 @@ class DataOrganizer(object):
         self.region_name = region[0]
         self.datapath = self.vardir / ('_'.join([varname, self.region_name]) + '.nc')
         self.downloader = CDSDownloader()
-        self.preprocessor = PreProcessor(self.operation, self.ncvarname, self.datapath, encoding = self.downloader.era_formats.loc[self.varname])
+        self.preprocessor = PreProcessor(self.operation, self.ncvarname, self.datapath, encoding = self.downloader.era_formats.loc[self.varname], region = region)
     
     def __repr__(self) -> str:
         return(f'DataOrganizer({self.varname},{self.region_name},{self.operation})')
 
-    def create_dataset(self) -> None:
-        """
-        Creates a new set if it does not exist, creates a new group plus variable when the specific operation is absent, does nothing otherwise
-        The group created is named 'operation' and the variable created is named 'varname-operation'
-        Lat lon dimensions need to be known upon creation, taken from the region box and the spacing.
-        """
-        groupname = self.operation
-        spacing = self.downloader.era_formats.loc[self.varname,'spacing']
-        if not self.datapath.exists():
-            rootset = nc.Dataset(self.datapath, mode='w', format = 'NETCDF4')
-            rootset.close()
-            logging.info(f'created {self.varname} data file')
-        
-        with nc.Dataset(self.datapath, mode='a') as presentset:
-            if not (self.operation in presentset.groups):
-                presentset.createGroup(groupname)
-                for dim in standard_dimensions.keys():
-                    if dim == 'latitude':
-                        lats = np.arange(self.region[3], self.region[1] + spacing, spacing)
-                        lats = np.round(lats, decimals = 2)
-                        presentset[groupname].createDimension(dimname = dim, size = len(lats))
-                        presentset[groupname].createVariable(varname = dim, dimensions = (dim,), **standard_dimensions[dim]['encoding'])
-                        presentset[groupname][dim][:] = lats
-                    elif dim == 'longitude':
-                        lons = np.arange(self.region[2], self.region[4] + spacing, spacing) 
-                        lons = np.round(lons, decimals = 2)
-                        lons = lons[~(lons >= 180)] # If wrapping round the full globe (beyond 180) then don't count these cells. In CDS these cells should be given as -180 and above. So remove everything >= 180
-                        presentset[groupname].createDimension(dimname = dim, size = len(lons))
-                        presentset[groupname].createVariable(varname = dim, dimensions = (dim,), **standard_dimensions[dim]['encoding'])
-                        presentset[groupname][dim][:] = lons
-                    else:
-                        presentset[groupname].createDimension(dimname = dim, size = standard_dimensions[dim]['size'])
-                        presentset[groupname].createVariable(varname = dim, dimensions = (dim,), **standard_dimensions[dim]['encoding'])
-                    presentset[groupname][dim].setncatts(standard_dimensions[dim]['attrs'])
-                presentset[groupname].createVariable(varname = self.ncvarname, dimensions = ('time','latitude','longitude'), **self.downloader.era_formats.loc[self.varname, ['datatype','fill_value']].to_dict())
-                if not self.downloader.era_formats.loc[self.varname,['scale_factor']].isnull().bool():
-                    setattr(presentset[groupname][self.ncvarname], 'scale_factor', self.downloader.era_formats.loc[self.varname,'scale_factor']) #set the scaling
-                logging.info(f'created group: {groupname} and variable: {self.ncvarname}')
-    
     def missing_dataset_days(self, desireddays: pd.DatetimeIndex ) -> pd.DatetimeIndex:
         """
         Checks if the desired daily timerange is present in the dataset, for the variable + operation of interest. Returns the difference.
@@ -384,15 +311,10 @@ class DataOrganizer(object):
         unprocessed_dates = pd.DatetimeIndex(unprocessed_dates)
         return((unprocessed_dates,unprocessed_paths))
     
-    def dummytime(self):
-        with nc.Dataset(self.datapath, mode='a') as presentset:
-            dates = pd.date_range('2000-01-01','2000-01-10')
-            presentset[self.operation]['time'][:] = nc.date2num(dates.to_pydatetime(), units = presentset[self.operation]['time'].units, calendar = presentset[self.operation]['time'].calendar)
-    
     def main(self, start: str, end: str):
         
         logging.info(repr(self))
-        self.create_dataset() # Does nothing if the variable is already there
+        self.preprocessor.writer.create_dataset(self, dimensions = ('time','latitude','longitude'))
         desireddays = pd.date_range(start = start, end = end, freq = 'D')
         logging.debug(f'desired days: {desireddays}')
         dif = self.missing_dataset_days(desireddays = desireddays)
@@ -426,15 +348,3 @@ class DataOrganizer(object):
             time.sleep(200)
             self.preprocessor.end()
 
-if __name__ == '__main__':
-    logging.basicConfig(filename='z300.log', filemode='w', level=logging.DEBUG, format='%(process)d-%(levelname)s-%(message)s')
-    #d = DataOrganizer(varname = 'z500', region = get_europe(), operation = '12UTC')
-    d = DataOrganizer(varname = 'z300', region = get_europe(), operation = '12UTC')
-    #d = DataOrganizer(varname = 'transp', region = get_europe(), operation = '24UTC')
-    #d = DataOrganizer(varname = 'sst', region = get_nhplus(), operation = 'mean')
-    #d = DataOrganizer(varname = 't2m', region = get_europe(), operation = 'mean')
-    #d = DataOrganizer(varname = 'siconc', region = get_nhmin(), operation = 'mean')
-    #d = DataOrganizer(varname = 'snowc', region = get_nhmin(), operation = '24UTC')
-    #d = DataOrganizer(varname = 'swvl1', region = get_europe(), operation = 'mean')
-    #d = DataOrganizer(varname = 'tcc', region = get_europe(), operation = 'mean')
-    d.main(start = '1979-01-01', end = '2019-12-31')

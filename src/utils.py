@@ -7,6 +7,27 @@ Created on Thu Jan 23 13:50:34 2020
 """
 import numpy as np
 import ctypes as ct
+from collections import namedtuple
+
+Region = namedtuple("Region", ["name", "latmax","lonmin", "latmin", "lonmax"])
+
+def get_europe() -> Region:
+    """
+    This should be interpreted as the box with the midpoints of the bounding gridcells.
+    """
+    return(Region("europe", 75, -30, 30, 40))
+
+def get_nhplus() -> Region:
+    """
+    This is the full northern hemisphere plus a (sub)tropical part of the sourthern hemisphere.
+    """
+    return(Region("nhplus", 90, -180, -40, 180))
+
+def get_nhmin() -> Region:
+    """
+    This is the part of the northern hemisphere experiencing snow cover and sea ice.
+    """
+    return(Region("nhmin", 90, -180, 30, 180))
 
 def get_corresponding_ctype(npdtype: type) -> type:
     simple_types = [ct.c_byte, ct.c_short, ct.c_int, ct.c_long, ct.c_longlong,
