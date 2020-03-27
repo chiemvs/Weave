@@ -8,7 +8,7 @@ import xarray as xr
 import logging
 from pathlib import Path
 from datetime import datetime
-from utils import Region
+from .utils import Region
 
 std_dimension_formats = {
     'time':{'encoding':{'datatype':'i4', 'fill_value':nc.default_fillvals['i4']},
