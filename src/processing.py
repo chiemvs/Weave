@@ -135,7 +135,7 @@ class ClimateComputer(Computer):
         coords.pop('time')
         coords.update({'doy':doys})
         results = xr.DataArray(data = np.stack(results, axis = 0), dims = ('doy',) + self.dims[1:], coords = coords, name = self.name) # delivers the array concatenated along the zeroth doy-dimension.
-        results.encoding = self.encoding
+        results.attrs = self.attrs
         logging.info(f'ClimateComputer stacked all doys along zeroth axis, returning xr.DataArray of shape {results.shape}')
         return results
 
@@ -170,7 +170,6 @@ class AnomComputer(Computer):
         np_outarray = np.frombuffer(self.outarray, dtype = self.dtype).reshape(self.shape) # For shared Ctype arrays
         result = xr.DataArray(np_outarray, dims = self.dims, coords = self.coords, name = '-'.join([self.name, 'anom']))
         result.attrs = self.attrs
-        result.encoding = self.encoding
         logging.info(f'AnomComputer added coordinates and attributes to anom outarray with shape {result.shape} and will return as xr.DataArray')
         return result
 
@@ -216,7 +215,6 @@ class TimeAggregator(Computer):
         coords['time'] = coords['time'][time_axis_indices]
         result = xr.DataArray(np_outarray, dims = self.dims, coords = coords, name = '-'.join([self.name, str(ndayagg), 'roll' if rolling else 'nonroll', method]))
         result.attrs = self.attrs
-        result.encoding = self.encoding
         logging.info(f'TimeAggregator added coordinates and attributes to aggregated outarray with shape {result.shape} and will return as xr.DataArray')
         return result
 

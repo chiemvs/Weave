@@ -93,7 +93,7 @@ class Writer(object):
                 presentset.createVariable(varname = self.ncvarname, dimensions = dimensions, **self.formats.loc[['datatype','fill_value']].to_dict())
                 if not self.formats.loc[['scale_factor']].isnull().bool():
                     setattr(presentset[self.ncvarname], 'scale_factor', self.formats.loc['scale_factor']) #set the scaling
-                logging.info(f'created group: {self.groupname} and variable: {self.ncvarname}')
+                logging.info(f'Writer created group: {self.groupname} and variable: {self.ncvarname}')
 
     def append_one_day(self, writedate: datetime, dayfield: np.ndarray, index: int, units: str = None):
         """
@@ -108,7 +108,7 @@ class Writer(object):
             # Start appending along the time axis
             presentset[self.ncvarname][index,:,:] = dayfield
             presentset['time'][index] = nc.date2num(writedate, units = presentset['time'].units, calendar = presentset['time'].calendar)
-            logging.debug(f'succesfully appended {date} to the netcdf')
+            logging.debug(f'Writer has succesfully appended {date} to the netcdf')
             
             if not hasattr(presentset[self.ncvarname], 'units') and not (units is None):
                 setattr(presentset[self.ncvarname], 'units',units)
@@ -120,7 +120,7 @@ class Writer(object):
         Array needs to be masked to correctly write missing values
         So conversion to np.ma will be done when xarray is signalled 
         """
-        if isinstance(inp, xr.DataArray):
+        if isinstance(array, xr.DataArray):
             def convert(subarray):
                 return subarray.to_masked_array(copy = False)
         else:
@@ -138,6 +138,7 @@ class Writer(object):
                     presentset[self.ncvarname][start:,...] = convert(array[start:,...])
                 else:
                     presentset[self.ncvarname][start:(start + blocksize),...] = convert(array[start:(start + blocksize),...])
+                logging.debug(f'Writer succesfully appended wrote {count} size {blocksize} to the netcdf')
             if not hasattr(presentset[self.ncvarname], 'units') and not (units is None):
                 setattr(presentset[self.ncvarname], 'units',units)
 

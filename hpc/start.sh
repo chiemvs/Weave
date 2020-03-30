@@ -21,5 +21,5 @@ pip install -r $1
 python3 $SCRIPT $TMPDIR $INDIR $HOME $NPROC $OUTDIR # script, tmpstorage_on_the_node, obsdir (reading data), packagedir (for loading the code), nprocesses, OUTDIR (writing results)
 
 #rsync -av $TMPDIR/ $HOME --exclude VENV --exclude nodelist
-cp *.log $HOME
-cp *.dat $HOME
+cp $TMPDIR/*.log $HOME
+cp $TMPDIR/*.dat $HOME
