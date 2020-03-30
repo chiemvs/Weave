@@ -112,3 +112,33 @@ class Writer(object):
             
             if not hasattr(presentset[self.ncvarname], 'units') and not (units is None):
                 setattr(presentset[self.ncvarname], 'units',units)
+
+    def write(self, array, blocksize: int = 1000, units: str = None):
+        """
+        Fully writes an array to the created netcdf dataset.
+        Can be numpy maskedarray or an xarray, is written in parts, along the first axis
+        Array needs to be masked to correctly write missing values
+        So conversion to np.ma will be done when xarray is signalled 
+        """
+        if isinstance(inp, xr.DataArray):
+            def convert(subarray):
+                return subarray.to_masked_array(copy = False)
+        else:
+            assert isinstance(array, np.ma.MaskedArray)
+            def convert(subarray):
+                return subarray
+
+        with nc.Dataset(self.datapath, mode='a') as presentset:
+            if isinstance(self.groupname, str):
+                presentset = presentset[self.groupname] # Move one level down
+            assert presentset[self.ncvarname].shape == array.shape
+            starts = np.arange(0,array.shape[0],blocksize)
+            for count, start in enumerate(starts):
+                if count == len(starts) - 1: # Last start, write everything that remains
+                    presentset[self.ncvarname][start:,...] = convert(array[start:,...])
+                else:
+                    presentset[self.ncvarname][start:(start + blocksize),...] = convert(array[start:(start + blocksize),...])
+            if not hasattr(presentset[self.ncvarname], 'units') and not (units is None):
+                setattr(presentset[self.ncvarname], 'units',units)
+
+        
