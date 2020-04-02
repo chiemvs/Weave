@@ -11,6 +11,7 @@ import pandas as pd
 import logging
 from pathlib import Path
 from .utils import get_corresponding_ctype
+from .inputoutput import Reader
 
 # A global dictionary storing the variables that are filled with an initializer and inherited by each of the worker processes
 var_dict = {}
@@ -98,8 +99,16 @@ class Computer(object):
     Super class that provides a common initialization for computers that need acces to an on disk netcdf array, extract coordinate information from them and prepare the array as numpy in (shared) memory for sub-processes to access it.
     Assumes that the time dimension is the zero-th dimension
     """
-    def __init__(self, datapath, group, share_input):
-        data = xr.open_dataarray(datapath, group = group)
+    def __init__(self, datapath: Path, group: str, ncvarname: str, share_input: bool, reduce_input: bool):
+        """
+        Opening data with xarray has not the ability to read with less precision
+        always float32. Therefore if reduce_input is chosen, then the writer class is instructed to read with precision float16
+        """
+        if reduce_input:
+            data = Reader(datapath = datapath, ncvarname = ncvarname, groupname = group)
+            data.read(dtype = np.float16) # This object now has similar attributes as an xr.DataArray, just values of a different precision
+        else:
+            data = xr.open_dataarray(datapath, group = group)
         assert data.dims[0] == 'time'
         self.coords = data.coords
         self.dims = data.dims
@@ -117,15 +126,15 @@ class Computer(object):
         else:
             self.inarray = data.values
         logging.info(f'Computer placed inarray of dimension {self.shape} in memory, shared = {self.share_input}')
-        self.doyaxis = data.time.dt.dayofyear.values
+        self.doyaxis = data.coords['time'].dt.dayofyear.values
         self.maxdoy = 366
 
 class ClimateComputer(Computer):
     """
     Output is never shared as it is only a small array. One spatial field per doy, with a maximum of 366
     """
-    def __init__(self, datapath: Path, group = None, share_input: bool = False):
-        Computer.__init__(self, datapath, group, share_input)
+    def __init__(self, datapath: Path, group: str = None, ncvarname: str = None, share_input: bool = False, reduce_input: bool = False):
+        Computer.__init__(self, datapath = datapath, group = group, ncvarname = ncvarname, share_input = share_input, reduce_input = reduce_input)
     
     def compute(self, nprocs = 1):
         doys = list(range(1, self.maxdoy + 1))
@@ -145,8 +154,8 @@ class AnomComputer(Computer):
     The climatology is supplied as a loaded xarray. 
     Will write to a shared outarray of same dimensions.
     """
-    def __init__(self, datapath: Path, climate: xr.DataArray, group = None, share_input: bool = False):
-        Computer.__init__(self, datapath, group, share_input)
+    def __init__(self, datapath: Path, climate: xr.DataArray, group: str = None, ncvarname: str = None, share_input: bool = False, reduce_input: bool = False):
+        Computer.__init__(self, datapath = datapath, group = group, ncvarname = ncvarname, share_input = share_input, reduce_input = reduce_input)
         self.climate = climate
         assert climate.dims[0] == 'doy'
         # Checking compatibility of non-zeroth dimensions
@@ -181,8 +190,8 @@ class TimeAggregator(Computer):
     For non-rolling aggregation it is possible to supply a first day
     This allows a full overlap with another block-aggregated time series
     """
-    def __init__(self, datapath: Path, group = None, share_input: bool = False):
-        Computer.__init__(self, datapath, group, share_input)
+    def __init__(self, datapath: Path, group: str = None, ncvarname: str = None, share_input: bool = False, reduce_input: bool = False):
+        Computer.__init__(self, datapath = datapath, group = group, ncvarname = ncvarname, share_input = share_input, reduce_input = reduce_input)
         assert (np.diff(self.coords['time']) == np.timedelta64(1,'D')).all(), "Time axis should be continuous daily to be allegible for aggregation"
         # Preparing and sharing the output
         self.outarray = mp.RawArray(get_corresponding_ctype(self.dtype), size_or_initializer=self.size)

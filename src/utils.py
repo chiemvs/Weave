@@ -34,6 +34,8 @@ def get_corresponding_ctype(npdtype: type) -> type:
     ct.c_ubyte, ct.c_ushort, ct.c_uint, ct.c_ulong, ct.c_ulonglong,
     ct.c_float, ct.c_double, ct.c_bool,]
     nptypes = {np.dtype(t):t for t in simple_types}
+    # np.float16 does not exist as a ctype. Because the ctype is just to store in shared memory and first converted for all computation and reading/wriding we use a placeholder of similar number of bytes (2)
+    nptypes.update({np.dtype(np.float16):ct.c_short})
     return nptypes[np.dtype(npdtype)]
 
 def nanquantile(array, q):
@@ -71,6 +73,8 @@ def _zvalue_from_index(arr, ind):
     """private helper function to work around the limitation of np.choose() by employing np.take()
     arr has to be a 3D array or 2D (inferred by ndim)
     ind has to be an array without the first arr dimension containing values for z-indicies to take from arr
+        self.encoding = data.encoding
+        self.share_input = share_input
     See: http://stackoverflow.com/a/32091712/4169585
     This is faster and more memory efficient than using the ogrid based solution with fancy indexing.
     """

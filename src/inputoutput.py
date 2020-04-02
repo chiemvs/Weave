@@ -143,3 +143,52 @@ class Writer(object):
                 setattr(presentset[self.ncvarname], 'units',units)
 
         
+class Reader(object):
+    """
+    Netcdf object to read a netcdf file with a desired precision
+    xarray open_dataarray standard provides .data as float 32. Here I want to go to float16.
+    """
+    def __init__(self, datapath: Path, ncvarname: str, groupname: str = None):
+        """
+        Possibility to supply a hierarchical group for inside the netCDF4 file. 
+        """
+        self.datapath = datapath
+        self.groupname = groupname
+        self.ncvarname = ncvarname
+
+    def read(self, dtype: type = np.float16, blocksize: int = 100):
+        """
+        Only the data reading is taken over from xarray. Coords, dims and encoding not
+        """
+        with nc.Dataset(self.datapath, mode='r') as presentset:
+            if isinstance(self.groupname, str):
+                presentset = presentset[self.groupname] # Move one level down
+
+            self.shape = presentset[self.ncvarname].shape
+            self.values = np.full(shape = self.shape, fill_value = np.nan, dtype = dtype)
+            presentset[self.ncvarname].set_auto_maskandscale(True) # Default but nice to have explicit that masked arrays are returned (at least, when missing values are present, see also comment below)
+            starts = np.arange(0,self.shape[0], blocksize)
+            for count, start in enumerate(starts):
+                # Read a scaled block by slice
+                if count == len(starts) - 1: # Last start, write everything that remains
+                    blockslice = slice(start,None,None)
+                else:
+                    blockslice = slice(start,(start+blocksize),None)
+                block = presentset[self.ncvarname][blockslice,...].astype(dtype)
+                # This block is either a masked array is returned or a regular numpy array when no missing values are found (Unfortunately only in netCDF4 version of 1.4+ we can regulate the behaviour of always returning a masked array)
+                # Therefore we convert
+                try:
+                    block = block.filled(np.nan)
+                except AttributeError:
+                    pass
+                self.values[blockslice,...] = block
+
+        # Storing additional information. By using xarray
+        self.dtype = dtype
+        self.name = self.ncvarname
+        temp = xr.open_dataarray(self.datapath, group = self.groupname)
+        for attrname in ['dims','attrs','size','coords','encoding']:
+            setattr(self, attrname, getattr(temp, attrname))
+
+
+            
