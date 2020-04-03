@@ -34,15 +34,14 @@ if __name__ == '__main__':
         with nc.Dataset(OBSDIR / inputfile, mode = 'r') as dat:
             group = list(dat.groups.keys())[0]
 
-        #dat = xr.open_dataarray(OBSDIR / inputfile, group = group).astype('float16')
-        cc = ClimateComputer(datapath = OBSDIR / inputfile, group = group, share_input = True)
+        cc = ClimateComputer(datapath = OBSDIR / inputfile, group = group, share_input = False, reduce_input = True)
         clim = cc.compute(nprocs = int(NPROC))
         w = Writer(datapath = OUTDIR / '.'.join([name,'clim','nc']), varname = varname, ncvarname = clim.name) # Written without group structure
         w.create_dataset(example = clim)
         w.write(clim, units = clim.units)
         del cc # Too memory intensive to keep around
         
-        ac = AnomComputer(datapath = OBSDIR / inputfile, group = group, share_input = True, climate = clim)
+        ac = AnomComputer(datapath = OBSDIR / inputfile, group = group, share_input = False, reduce_input = True, climate = clim)
         anom = ac.compute(nprocs = int(NPROC))
         w = Writer(datapath = OUTDIR / '.'.join([name,'anom','nc']), varname = varname, ncvarname = anom.name)
         w.create_dataset(example = anom)
