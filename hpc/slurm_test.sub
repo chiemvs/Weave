@@ -1,0 +1,9 @@
+#!/usr/bin/bash
+#SBATCH --job-name="snow"
+#SBATCH --cpus-per-task=2
+#SBATCH --time=24:00:00
+#SBATCH --partition=test
+#SBATCH --output=../../python_%j.out
+#SBATCH --error=../../python_%j.err
+
+./start.sh ../requirements.txt 1 ./testclimate.py $HOME/ERA5 $HOME/processed

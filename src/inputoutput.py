@@ -138,7 +138,7 @@ class Writer(object):
                     presentset[self.ncvarname][start:,...] = convert(array[start:,...])
                 else:
                     presentset[self.ncvarname][start:(start + blocksize),...] = convert(array[start:(start + blocksize),...])
-                logging.debug(f'Writer succesfully appended wrote {count} size {blocksize} to the netcdf')
+                logging.debug(f'Writer succesfully wrote block {count} size {blocksize} to the netcdf')
             if not hasattr(presentset[self.ncvarname], 'units') and not (units is None):
                 setattr(presentset[self.ncvarname], 'units',units)
 
@@ -182,6 +182,7 @@ class Reader(object):
                 except AttributeError:
                     pass
                 self.values[blockslice,...] = block
+                logging.debug(f'Reader succesfully read block {count} size {blocksize} from the netcdf')
 
         # Storing additional information. By using xarray
         self.dtype = dtype
