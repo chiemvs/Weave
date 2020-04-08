@@ -170,10 +170,16 @@ class AnomComputer(Computer):
         """
         Will call workers to compute on each doy subset of the timeseries
         They will write to the same array (but non-overlapping locations)
+        Will not use multiprocessing when the desired nprocs is only one
         """
         doys = list(range(1, self.maxdoy + 1))
-        with mp.Pool(processes = nprocs, initializer=init_worker, initargs=(self.inarray,self.share_input,self.dtype,self.shape,self.doyaxis,self.climate,self.outarray,None,None)) as pool:
-            pool.map(subtract_per_doy,doys)
+        if nprocs > 1:
+            with mp.Pool(processes = nprocs, initializer=init_worker, initargs=(self.inarray,self.share_input,self.dtype,self.shape,self.doyaxis,self.climate,self.outarray,None,None)) as pool:
+                pool.map(subtract_per_doy,doys)
+        else: # Just a sequential loop, still use of a shared memory array
+            init_worker(self.inarray,self.share_input,self.dtype,self.shape,self.doyaxis,self.climate,self.outarray,None,None)
+            for doy in doys:
+                subtract_per_doy(doy)
 
         # Reconstruction from shared out array
         np_outarray = np.frombuffer(self.outarray, dtype = self.dtype).reshape(self.shape) # For shared Ctype arrays
@@ -200,6 +206,7 @@ class TimeAggregator(Computer):
     def compute(self, nprocs, ndayagg: int = 1, method: str = 'mean', firstday: pd.Timestamp = None, rolling: bool = False):
         """
         Will call workers to aggregate a number of days, starting at the first index, stamped left, and moving one step further in case of rolling. And in case of non-rolling, starting with a certain index, stamping left and jumping further
+        Will not use multiprocessing when the desired nprocs is only one
         """
         if rolling:
             # Slicing off the end where not enough days are present to aggregate
@@ -215,8 +222,13 @@ class TimeAggregator(Computer):
                 logging.debug(f'TimeAggregator found no firstday {firstday}, non-rolling aggregation will start at location 0')
             time_axis_indices = np.arange(which_first,self.shape[0] - ndayagg + 1, ndayagg)
 
-        with mp.Pool(processes = nprocs, initializer=init_worker, initargs=(self.inarray,self.share_input,self.dtype,self.shape,self.doyaxis,None,self.outarray,ndayagg,method)) as pool:
-            pool.map(aggregate_at,time_axis_indices)
+        if nprocs > 1:
+            with mp.Pool(processes = nprocs, initializer=init_worker, initargs=(self.inarray,self.share_input,self.dtype,self.shape,self.doyaxis,None,self.outarray,ndayagg,method)) as pool:
+                pool.map(aggregate_at,time_axis_indices)
+        else: # Just a sequential loop, still use of a shared memory array
+            init_worker(self.inarray,self.share_input,self.dtype,self.shape,self.doyaxis,None,self.outarray,ndayagg,method)
+            for timeindex in time_axis_indices:
+                aggregate_at(timeindex)
 
         # Reconstruction from shared out array
         np_outarray = np.frombuffer(self.outarray, dtype = self.dtype).reshape(self.shape)[time_axis_indices,...] 
