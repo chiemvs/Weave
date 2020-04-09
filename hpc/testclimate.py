@@ -1,5 +1,5 @@
 """
-Call signature: python testclimate.py $TEMPDIR $OBSDIR $PACKAGEDIR $NPROC
+Call signature: python testclimate.py $TEMPDIR $OBSDIR $PACKAGEDIR $NPROC $OUTDIR
 """
 
 import sys

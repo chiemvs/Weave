@@ -35,7 +35,7 @@ class CDSDownloader(object):
             'setname':['reanalysis-era5-pressure-levels','reanalysis-era5-pressure-levels','reanalysis-era5-single-levels','reanalysis-era5-single-levels','reanalysis-era5-single-levels','reanalysis-era5-land','reanalysis-era5-land','reanalysis-era5-land','reanalysis-era5-land','reanalysis-era5-land','reanalysis-era5-land','reanalysis-era5-single-levels',],
             'timevariable':['dataTime','dataTime','dataTime','dataTime','dataTime','endStep','forecastTime','dataTime','dataTime','dataTime','dataTime','dataTime',], # The relevant grib parameter in the files, depends on accumulated variable and ERA-Land or not
             }, index = pd.Index(['z500','z300','siconc','sst','t2m','transp','snowc','swvl1','swvl2','swvl3','swvl4','tcc'], name = 'varname'))
-        self.era_formats = self.era_formats.join(variable_formats)
+        self.era_formats = self.era_formats.join(variable_formats, how = 'left')
     
     def create_requests_and_populate_queue(self, downloaddates: pd.DatetimeIndex, request_kwds: dict) -> list:
         """

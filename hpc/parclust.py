@@ -1,5 +1,5 @@
 """
-Call signature: python parcluster.py $TEMPDIR $OBSDIR $PACKAGEDIR $NPROC
+Call signature: python parcluster.py $TEMPDIR $OBSDIR $PACKAGEDIR $NPROC $CLUSTERDIR
 """
 
 import sys
@@ -16,6 +16,7 @@ OUTDIR = Path(sys.argv[5])
 sys.path.append(PACKAGEDIR)
 
 from Weave.src import clustering as cl
+from Weave.src.inputoutput import Writer
 
 # E-OBS part, has a very large memory footprint and thus seems to work best with 5 workers and shared reading memory
 #logging.basicConfig(filename= OBSDIR / 'eobs_cluster3D_DJF.log', filemode='w', level=logging.DEBUG, format='%(asctime)s-%(process)d-%(levelname)s-%(message)s', datefmt='%m-%d %H:%M:%S')
@@ -54,5 +55,8 @@ c.reshape_and_drop_obs(season='JJA', mask=mask)
 c.prepare_for_distance_algorithm(where=None, manipulator=cl.Exceedence, kwargs={'quantile':0.98})
 c.call_distance_algorithm(func = pairwise_distances, kwargs= {'metric':'jaccard'}, n_par_processes = int(NPROC))
 storekwargs = c.store_dist_matrix(directory = TMPDIR)
-returnarray = c.clustering(nclusters = list(range(2,16)))
-returnarray.to_netcdf(OUTDIR / 't2m-q098.nc')
+returnarray = c.clustering(nclusters = list(range(2,16))) # Makes sure that it has a name: clustid
+#returnarray.to_netcdf(OUTDIR / 't2m-q098.nc') # TODO: make sure that the Writer class is used here. We want coordinates with the standard dimensions encoding. 
+w = Writer(datapath = OUTDIR / 't2m-q098.nc', varname = returnarray.name)
+w.create_dataset(example = returnarray)
+w.write(array = returnarray)

@@ -99,16 +99,18 @@ class Computer(object):
     Super class that provides a common initialization for computers that need acces to an on disk netcdf array, extract coordinate information from them and prepare the array as numpy in (shared) memory for sub-processes to access it.
     Assumes that the time dimension is the zero-th dimension
     """
-    def __init__(self, datapath: Path, group: str, ncvarname: str, share_input: bool, reduce_input: bool):
+    def __init__(self, datapath: Path = None, group: str = None, ncvarname: str = None, share_input: bool = True, reduce_input: bool = False, data: xr.DataArray = None):
         """
         Opening data with xarray has not the ability to read with less precision
         always float32. Therefore if reduce_input is chosen, then the writer class is instructed to read with precision float16
+        Also has the option to be supplied with an already loaded array (called data)
         """
-        if reduce_input:
-            data = Reader(datapath = datapath, ncvarname = ncvarname, groupname = group)
-            data.read(dtype = np.float16) # This object now has similar attributes as an xr.DataArray, just values of a different precision
-        else:
-            data = xr.open_dataarray(datapath, group = group)
+        if data is None:
+            if reduce_input:
+                data = Reader(datapath = datapath, ncvarname = ncvarname, groupname = group)
+                data.read(dtype = np.float16) # This object now has similar attributes as an xr.DataArray, just values of a different precision
+            else:
+                data = xr.open_dataarray(datapath, group = group)
         assert data.dims[0] == 'time'
         self.coords = data.coords
         self.dims = data.dims

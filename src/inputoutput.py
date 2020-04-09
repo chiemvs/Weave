@@ -18,13 +18,17 @@ std_dimension_formats = {
     'longitude':{'encoding':{'datatype':'f4', 'fill_value':nc.default_fillvals['f4']},
         'attrs':{'units':'degrees_east'}},
     'doy':{'encoding':{'datatype':'i2', 'fill_value':nc.default_fillvals['i2']},
-        'attrs':{'units':'dayofyear'}, 'size':366}}
+        'attrs':{'units':'dayofyear'}, 'size':366},
+    'nclusters':{'encoding':{'datatype':'i4', 'fill_value':nc.default_fillvals['i4']},
+        'attrs':{'units':''}},
+    'clustid':{'encoding':{'datatype':'i4', 'fill_value':nc.default_fillvals['i4']},
+        'attrs':{'units':''}}}
 
 variable_formats = pd.DataFrame(data = {
-    'spacing':[0.25,0.25,0.25,0.25,0.25,0.1,0.1,0.1,0.1,0.1,0.1,0.25],
-    'datatype':['i2','i2','i1','i2','i2','i2','i1','i1','i1','i1','i1','i1'],
-    'scale_factor':[10,10,0.01,0.01,0.02,0.000005,None,0.01,0.01,0.01,0.01,None],
-    }, index = pd.Index(['z500','z300','siconc','sst','t2m','transp','snowc','swvl1','swvl2','swvl3','swvl4','tcc'], name = 'varname'))
+    'spacing':[0.25,0.25,0.25,0.25,0.25,0.1,0.1,0.1,0.1,0.1,0.1,0.25,None],
+    'datatype':['i2','i2','i1','i2','i2','i2','i1','i1','i1','i1','i1','i1','i4'],
+    'scale_factor':[10,10,0.01,0.01,0.02,0.000005,None,0.01,0.01,0.01,0.01,None,None],
+    }, index = pd.Index(['z500','z300','siconc','sst','t2m','transp','snowc','swvl1','swvl2','swvl3','swvl4','tcc','clustid'], name = 'varname'))
 variable_formats['fill_value'] = variable_formats['datatype'].apply(lambda s: nc.default_fillvals[s])
 
 class Writer(object):
