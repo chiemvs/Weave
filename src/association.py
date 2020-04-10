@@ -57,10 +57,11 @@ def lag_subset_detrend_associate(spatial_index: tuple):
         logging.debug(f'Worker starts lagging, detrending and correlating of cell {spatial_index} for lags {laglist}')
         for lag in laglist: # Units is days
             oriset['time'] = intimeaxis - pd.Timedelta(str(lag) + 'D') # Each point in time is assigned to a lagged date
-            subset = oriset.reindex_like(subsettimeaxis) # We only retain the points assigned to the dates of the response timeseries
-            subset = detrend(subset) # Only a single axis
+            subset = oriset.reindex_like(subsettimeaxis) # We only retain the points assigned to the dates of the response timeseries. Potentially this generates some nans. Namely when the response series extends further than the precursor (ERA5 vs ERA5-land)
+            subset = subset[~subset.isnull()] # Then we only retain non-nan. detrend and pearsonr cant handle them
+            subset.values = detrend(subset) # Only a single axis, replace values. We need the non-nan timeaxis to also get a potentially reduced subset of the response
             out_index = (laglist.index(lag), slice(None)) + spatial_index # Remember the shape of (len(lagrange),2) + spatdims 
-            outarray[out_index] = pearsonr(var_dict['responseseries'], subset) # Returns (corr,pvalue)
+            outarray[out_index] = pearsonr(var_dict['responseseries'].reindex_like(subset), subset) # Returns (corr,pvalue)
 
 class Associator(Computer):
 
