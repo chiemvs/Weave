@@ -10,10 +10,12 @@ Aimed at acting per spatial cell.
 import numpy as np
 import xarray as xr
 import multiprocessing as mp
+import pandas as pd
 import logging
 import itertools
 from scipy.stats import pearsonr
 from scipy.signal import detrend
+from statsmodels.stats.multitest import multipletests 
 from .utils import get_corresponding_ctype
 from .processing import Computer
 
@@ -41,18 +43,24 @@ def lag_subset_detrend_associate(spatial_index: tuple):
     full_index = (slice(None),) + spatial_index # Assumes the unlimited time on the first axis
     inarray = np.frombuffer(var_dict['inarray'], dtype = var_dict['dtype']).reshape(var_dict['shape'])[full_index]
     outarray = np.frombuffer(var_dict['outarray'], dtype = var_dict['outdtype']).reshape(var_dict['outshape'])
-    # Now inarray is a one dimensional numpy array, we need the original and series time coordinates to do the lagging
-    intimeaxis = var_dict['intimeaxis']
-    oriset = xr.DataArray(inarray, dims = ('time',), coords = {'time':intimeaxis})
-    subsettimeaxis = var_dict['responseseries'].time
-    # Prepare the computation results. First axis: lags, second axis: [corrcoef, pvalue]
-    laglist = var_dict['laglist']
-    for lag in laglist: # Units is days
-        oriset['time'] = intimeaxis - pd.Timedelta(str(lag) + 'D') # Each point in time is assigned to a lagged date
-        subset = oriset.reindex_like(subsettimeaxis) # We only retain the points assigned to the dates of the response timeseries
-        subset = detrend(subset) # Only a single axis
-        out_index = (laglist.index(lag), slice(None)) + spatial_index # Remember the shape of (len(lagrange),2) + spatdims 
-        outarray[out_index] = pearsonr(var_dict['responseseries'], subset) # Returns (corr,pvalue)
+    if np.isnan(inarray).all(): # We are dealing with an empty cell
+        logging.debug(f'Worker found empty cell at {spatial_index}, returning np.nan')
+        out_index = (slice(None),slice(None)) + spatial_index
+        outarray[out_index] = np.nan
+    else:
+        # Now inarray is a one dimensional numpy array, we need the original and series time coordinates to do the lagging
+        intimeaxis = var_dict['intimeaxis']
+        oriset = xr.DataArray(inarray, dims = ('time',), coords = {'time':intimeaxis})
+        subsettimeaxis = var_dict['responseseries'].time
+        # Prepare the computation results. First axis: lags, second axis: [corrcoef, pvalue]
+        laglist = var_dict['laglist']
+        logging.debug(f'Worker starts lagging, detrending and correlating of cell {spatial_index} for lags {laglist}')
+        for lag in laglist: # Units is days
+            oriset['time'] = intimeaxis - pd.Timedelta(str(lag) + 'D') # Each point in time is assigned to a lagged date
+            subset = oriset.reindex_like(subsettimeaxis) # We only retain the points assigned to the dates of the response timeseries
+            subset = detrend(subset) # Only a single axis
+            out_index = (laglist.index(lag), slice(None)) + spatial_index # Remember the shape of (len(lagrange),2) + spatdims 
+            outarray[out_index] = pearsonr(var_dict['responseseries'], subset) # Returns (corr,pvalue)
 
 class Associator(Computer):
 
@@ -83,10 +91,35 @@ class Associator(Computer):
         self.outarray = mp.RawArray(get_corresponding_ctype(self.outdtype), size_or_initializer=self.outsize)
         logging.info(f'Associator placed outarray of dimension {self.outshape} in shared memory')
 
-    def compute(nprocs):
+    def compute(self, nprocs, alpha: float = 0.05):
         # Prepare all the associated spatial coordinates
         with mp.Pool(processes = nprocs, initializer=init_worker, initargs=(self.inarray, self.dtype, self.shape, self.coords['time'], self.responseseries, self.outarray, self.outdtype, self.outshape, self.laglist)) as pool:
             results = pool.map(lag_subset_detrend_associate,self.indextuples)
 
-        # Debugged the workers. Continue with restructuring the output
+        # Reconstruction from shared out array
+        np_outarray = np.frombuffer(self.outarray, dtype = self.outdtype).reshape(self.outshape) # For shared Ctype arrays
+        # We are going to store with dimension (lags, spatdims), either masked or seperate as dataset
+        returnshape = list(self.outshape)
+        returnshape.pop(1)
+        logging.info(f'Associator recieved all computed correlations and pvalues and will use those to produce a masked array of shape {returnshape}')
+        # Mask the correlation array with the p-values? And record the fraction of cells that became unsignificant
+        mask = np.full(returnshape, True, dtype = np.bool) # Everything starts with not-rejected null hyp and masked
+        for lag in self.laglist:
+            pfield = np_outarray[self.laglist.index(lag),1,...]
+            nonan_indices = np.where(~np.isnan(pfield)) # Tuple with arrays of indices. one array if only 1D, but two in a 2D tuple if two spatial dimensions
+            pfield_flat = pfield[nonan_indices].flatten() # As multipletest can only handle 1D p-value arrays, and subsetting to not-nan because we don't want nan to contribute to n_tests
+            fracbefore = round((pfield_flat < alpha).sum() / pfield_flat.size , 5)
+            reject, pfield_flat, garbage1, garbage2 = multipletests(pfield_flat, alpha = alpha, method = 'fdr_bh', is_sorted = False)
+            fracafter = round((pfield_flat < alpha).sum() / pfield_flat.size , 5)
+            mask[(self.laglist.index(lag),) + nonan_indices] = ~reject # First part of this joined tuple is only one number, the index of the current lag in the lagaxis
+            self.attrs.update({f'lag{lag}':f'frac p < {alpha} before: {fracbefore}, after: {fracafter}'})
+            
+        # Preparing the to be returned dataarray
+        coords = {'lag':self.laglist}
+        dims = ('lag',) + self.dims[1:]
+        for dim in self.dims[1:]:
+            coords.update({dim:self.coords[dim].values})
+        corr = xr.DataArray(np.ma.masked_array(data = np_outarray[:,0,...], mask = mask), dims = dims, coords = coords, name = 'correlation')
+        corr.attrs = self.attrs
+        return corr
 

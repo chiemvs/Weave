@@ -6,6 +6,8 @@ Created on Thu Jan 23 13:50:34 2020
 @author: straaten
 """
 import numpy as np
+import xarray as xr
+import pandas as pd
 import ctypes as ct
 from collections import namedtuple
 
@@ -89,3 +91,30 @@ def _zvalue_from_index(arr, ind):
         idx = nC*ind + np.arange(nC)
         
     return(np.take(arr, idx))
+
+def agg_time(array: xr.DataArray, ndayagg: int = 1, method: str = 'mean', firstday: pd.Timestamp = None, rolling: bool = False) -> xr.DataArray:
+    """
+    Aggegates a daily time dimension, that should be continuous, otherwise non-neighbouring values are taken together. 
+    It returns a left stamped aggregation of ndays
+    For non-rolling aggregation it is possible to supply a firstday, to sync the blocks with another timeseries.
+    Trailing Nan's are removed.
+    """
+    assert (np.diff(array.time) == np.timedelta64(1,'D')).all(), "time axis should be a continuous daily to be aggregated, though nan is allowed"
+    if rolling:
+        name = array.name
+        attrs = array.attrs
+        f = getattr(array.rolling({'time':ndayagg}, center = False), method) # Stamped right
+        array = f()
+        array = array.assign_coords(time = array.time - pd.Timedelta(str(ndayagg - 1) + 'D')).isel(time = slice(ndayagg - 1, None)) # Left stamping, trailing nans removed
+        array.name = name
+        array.attrs = attrs
+    else:
+        array = array.sel(time = slice(firstday, None))
+        input_length = len(array.time)
+        f = getattr(array.resample(time = str(ndayagg) + 'D', closed = 'left', label = 'left'), method)
+        array = f(dim = 'time', keep_attrs = True, skipna = False)
+
+        if (input_length % ndayagg) != 0:
+            array = array.isel(time = slice(0,-1,None)) # Remove the last aggregation, if it has not been based on the full ndayagg
+
+    return array

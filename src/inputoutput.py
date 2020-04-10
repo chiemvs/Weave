@@ -22,13 +22,15 @@ std_dimension_formats = {
     'nclusters':{'encoding':{'datatype':'i4', 'fill_value':nc.default_fillvals['i4']},
         'attrs':{'units':''}},
     'clustid':{'encoding':{'datatype':'i4', 'fill_value':nc.default_fillvals['i4']},
-        'attrs':{'units':''}}}
+        'attrs':{'units':''}},
+    'lag':{'encoding':{'datatype':'i1', 'fill_value':nc.default_fillvals['i1']},
+        'attrs':{'units':'days'}}}
 
 variable_formats = pd.DataFrame(data = {
-    'spacing':[0.25,0.25,0.25,0.25,0.25,0.1,0.1,0.1,0.1,0.1,0.1,0.25,None],
-    'datatype':['i2','i2','i1','i2','i2','i2','i1','i1','i1','i1','i1','i1','i4'],
-    'scale_factor':[10,10,0.01,0.01,0.02,0.000005,None,0.01,0.01,0.01,0.01,None,None],
-    }, index = pd.Index(['z500','z300','siconc','sst','t2m','transp','snowc','swvl1','swvl2','swvl3','swvl4','tcc','clustid'], name = 'varname'))
+    'spacing':[0.25,0.25,0.25,0.25,0.25,0.1,0.1,0.1,0.1,0.1,0.1,0.25,None,None],
+    'datatype':['i2','i2','i1','i2','i2','i2','i1','i1','i1','i1','i1','i1','i4','i2'],
+    'scale_factor':[10,10,0.01,0.01,0.02,0.000005,None,0.01,0.01,0.01,0.01,None,None,0.0001],
+    }, index = pd.Index(['z500','z300','siconc','sst','t2m','transp','snowc','swvl1','swvl2','swvl3','swvl4','tcc','clustid','correlation'], name = 'varname'))
 variable_formats['fill_value'] = variable_formats['datatype'].apply(lambda s: nc.default_fillvals[s])
 
 class Writer(object):
@@ -58,7 +60,7 @@ class Writer(object):
         if not self.datapath.exists():
             rootset = nc.Dataset(self.datapath, mode='w', format = 'NETCDF4')
             rootset.close()
-            logging.info(f'Writer created {self.varname} data file')
+            logging.info(f'Writer created {self.varname} data file at {self.datapath}')
         
         if dimensions is None:
             dimensions = example.dims
@@ -117,7 +119,7 @@ class Writer(object):
             if not hasattr(presentset[self.ncvarname], 'units') and not (units is None):
                 setattr(presentset[self.ncvarname], 'units',units)
 
-    def write(self, array, blocksize: int = 1000, units: str = None):
+    def write(self, array, blocksize: int = 1000, units: str = None, attrs: dict = {}):
         """
         Fully writes an array to the created netcdf dataset.
         Can be numpy maskedarray or an xarray, is written in parts, along the first axis
@@ -145,6 +147,11 @@ class Writer(object):
                 logging.debug(f'Writer succesfully wrote block {count} size {blocksize} to the netcdf')
             if not hasattr(presentset[self.ncvarname], 'units') and not (units is None):
                 setattr(presentset[self.ncvarname], 'units',units)
+            # Setting additional attributes (if not yet present)
+            if attrs:
+                for key in attrs.keys():
+                    if not hasattr(presentset[self.ncvarname], key):
+                        setattr(presentset[self.ncvarname], key, attrs[key])
 
         
 class Reader(object):

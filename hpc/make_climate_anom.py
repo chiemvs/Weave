@@ -1,5 +1,5 @@
 """
-Call signature: python testclimate.py $TEMPDIR $OBSDIR $PACKAGEDIR $NPROC $OUTDIR
+Call signature: python testclimate.py $TEMPDIR $PACKAGEDIR $NPROC $OBSDIR $OUTDIR
 """
 
 import sys
@@ -11,9 +11,9 @@ import netCDF4 as nc
 from pathlib import Path
 
 TMPDIR = Path(sys.argv[1])
-OBSDIR = Path(sys.argv[2])
-PACKAGEDIR = sys.argv[3] # Currently not in use for the SurfaceObservations class (hardcoded there)
-NPROC = sys.argv[4]
+PACKAGEDIR = sys.argv[2] 
+NPROC = int(sys.argv[3])
+OBSDIR = Path(sys.argv[4])
 OUTDIR = Path(sys.argv[5])
 
 sys.path.append(PACKAGEDIR)
@@ -36,7 +36,7 @@ if __name__ == '__main__':
         ncvarname = '-'.join([varname, group])
 
         cc = ClimateComputer(datapath = OBSDIR / inputfile, group = group, ncvarname = ncvarname, share_input = False, reduce_input = True)
-        clim = cc.compute(nprocs = int(NPROC))
+        clim = cc.compute(nprocs = NPROC)
         w = Writer(datapath = OUTDIR / '.'.join([name,'clim','nc']), varname = varname, ncvarname = clim.name) # Written without group structure
         w.create_dataset(example = clim)
         w.write(clim, units = clim.units)
@@ -44,14 +44,14 @@ if __name__ == '__main__':
         #clim = xr.open_dataarray(OUTDIR / '.'.join([name,'clim','nc']))
         
         ac = AnomComputer(datapath = OBSDIR / inputfile, group = group, share_input = False, ncvarname = ncvarname, reduce_input = True, climate = clim)
-        anom = ac.compute(nprocs = int(NPROC))
+        anom = ac.compute(nprocs = NPROC)
         w = Writer(datapath = OUTDIR / '.'.join([name,'anom','nc']), varname = varname, ncvarname = anom.name)
         w.create_dataset(example = anom)
         w.write(anom, units = anom.units)
         del ac, anom
 
         #ta = TimeAggregator(datapath = OUTDIR / '.'.join([name,'anom','nc']), share_input = True)
-        #mean = ta.compute(nprocs = int(NPROC), ndayagg = 4, method = 'mean', firstday = pd.Timestamp('1979-01-01'), rolling = False)
+        #mean = ta.compute(nprocs = NPROC, ndayagg = 4, method = 'mean', firstday = pd.Timestamp('1979-01-01'), rolling = False)
         #w = Writer(datapath = OUTDIR / '.'.join([name,'anom',str(4),'nonroll','nc']), varname = varname, ncvarname = mean.name)
         #w.create_dataset(example = mean)
         #w.write(mean, units = mean.units)

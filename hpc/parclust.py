@@ -1,5 +1,5 @@
 """
-Call signature: python parcluster.py $TEMPDIR $OBSDIR $PACKAGEDIR $NPROC $CLUSTERDIR
+Call signature: python parcluster.py $TEMPDIR $PACKAGEDIR $NPROC $OBSDIR $CLUSTERDIR
 """
 
 import sys
@@ -8,9 +8,9 @@ import numpy as np
 from pathlib import Path
 
 TMPDIR = Path(sys.argv[1])
-OBSDIR = Path(sys.argv[2]) 
-PACKAGEDIR = sys.argv[3]
-NPROC = sys.argv[4]
+PACKAGEDIR = sys.argv[2]
+NPROC = int(sys.argv[3])
+OBSDIR = Path(sys.argv[4]) 
 OUTDIR = Path(sys.argv[5]) 
 
 sys.path.append(PACKAGEDIR)
@@ -33,7 +33,7 @@ from Weave.src.inputoutput import Writer
 #c.reshape_and_drop_obs(array = o.array, season='DJF', mask=mask) # Avoid the load method of the class.
 #del o
 #c.prepare_for_distance_algorithm(where='shared', manipulator=cl.Lagshift, kwargs={'lags':list(range(-20,21))})
-#c.call_distance_algorithm(func = cl.maxcorrcoef_worker, n_par_processes = int(NPROC))
+#c.call_distance_algorithm(func = cl.maxcorrcoef_worker, n_par_processes = NPROC)
 #storekwargs = c.store_dist_matrix(directory = OBSDIR / '..')
 ##c.distmat = np.memmap(OBSDIR / 'tg.distmat.dat', shape = (118249131,), dtype = np.float32)
 #returnarray = c.clustering(dissimheights = [0,0.005,0.01,0.025,0.05,0.1,0.15,0.2,0.3,0.4,0.5,1])
@@ -53,7 +53,7 @@ c = cl.Clustering(varname = 't2m', groupname = 'mean', storedir = Path(TMPDIR), 
 c.reshape_and_drop_obs(season='JJA', mask=mask)
 
 c.prepare_for_distance_algorithm(where=None, manipulator=cl.Exceedence, kwargs={'quantile':0.98})
-c.call_distance_algorithm(func = pairwise_distances, kwargs= {'metric':'jaccard'}, n_par_processes = int(NPROC))
+c.call_distance_algorithm(func = pairwise_distances, kwargs= {'metric':'jaccard'}, n_par_processes = NPROC)
 storekwargs = c.store_dist_matrix(directory = TMPDIR)
 returnarray = c.clustering(nclusters = list(range(2,16))) # Makes sure that it has a name: clustid
 #returnarray.to_netcdf(OUTDIR / 't2m-q098.nc') # TODO: make sure that the Writer class is used here. We want coordinates with the standard dimensions encoding. 
