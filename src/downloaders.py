@@ -298,7 +298,7 @@ class DataOrganizer(object):
         """
         unprocessed_dates = []
         unprocessed_paths = []
-        for item in self.rawdir.iterdir():
+        for item in self.rawdir.glob(f'*{self.region_name.lower()}*.grib'):
             if item.is_file():
                 try:
                     date = item.name[-15:-5]
@@ -314,7 +314,7 @@ class DataOrganizer(object):
     def main(self, start: str, end: str):
         
         logging.info(repr(self))
-        self.preprocessor.writer.create_dataset(self, dimensions = ('time','latitude','longitude'))
+        self.preprocessor.writer.create_dataset(dimensions = ('time','latitude','longitude'))
         desireddays = pd.date_range(start = start, end = end, freq = 'D')
         logging.debug(f'desired days: {desireddays}')
         dif = self.missing_dataset_days(desireddays = desireddays)

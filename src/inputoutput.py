@@ -114,7 +114,7 @@ class Writer(object):
             # Start appending along the time axis
             presentset[self.ncvarname][index,:,:] = dayfield
             presentset['time'][index] = nc.date2num(writedate, units = presentset['time'].units, calendar = presentset['time'].calendar)
-            logging.debug(f'Writer has succesfully appended {date} to the netcdf')
+            logging.debug(f'Writer has succesfully appended {writedate} to the netcdf')
             
             if not hasattr(presentset[self.ncvarname], 'units') and not (units is None):
                 setattr(presentset[self.ncvarname], 'units',units)

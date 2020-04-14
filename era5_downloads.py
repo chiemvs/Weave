@@ -6,12 +6,13 @@ ERA5-Land will have about a 9 times larger data volume than a single level of ER
 Hourly is not needed so reworking to daily averages/sums. 
 """
 
+import logging
 from src.utils import get_europe, get_nhplus, get_nhmin
 from src.downloaders import CDSDownloader, DataOrganizer
 
-#logging.basicConfig(filename='swvl4.log', filemode='w', level=logging.DEBUG, format='%(process)d-%(levelname)s-%(message)s')
-d = DataOrganizer(varname = 'z500', region = get_europe(), operation = '12UTC')
-#d = DataOrganizer(varname = 'z300', region = get_europe(), operation = '12UTC')
+logging.basicConfig(filename='z300_nhmin.log', filemode='w', level=logging.DEBUG, format='%(process)d-%(levelname)s-%(message)s')
+#d = DataOrganizer(varname = 'z500', region = get_nhmin(), operation = '12UTC')
+d = DataOrganizer(varname = 'z300', region = get_nhmin(), operation = '12UTC')
 #d = DataOrganizer(varname = 'transp', region = get_europe(), operation = '24UTC')
 #d = DataOrganizer(varname = 'sst', region = get_nhplus(), operation = 'mean')
 #d = DataOrganizer(varname = 't2m', region = get_europe(), operation = 'mean')
@@ -19,4 +20,4 @@ d = DataOrganizer(varname = 'z500', region = get_europe(), operation = '12UTC')
 #d = DataOrganizer(varname = 'snowc', region = get_nhmin(), operation = '24UTC')
 #d = DataOrganizer(varname = 'swvl4', region = get_europe(), operation = 'mean')
 #d = DataOrganizer(varname = 'tcc', region = get_europe(), operation = 'mean')
-#d.main(start = '1981-01-01', end = '2019-09-30')
+d.main(start = '1979-01-01', end = '2019-12-31')
