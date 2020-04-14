@@ -5,10 +5,11 @@ import pandas as pd
 import numpy as np
 import netCDF4 as nc
 import xarray as xr
+import multiprocessing as mp
 import logging
 from pathlib import Path
 from datetime import datetime
-from .utils import Region
+from .utils import Region, get_corresponding_ctype
 
 std_dimension_formats = {
     'time':{'encoding':{'datatype':'i4', 'fill_value':nc.default_fillvals['i4']},
@@ -29,7 +30,7 @@ std_dimension_formats = {
 variable_formats = pd.DataFrame(data = {
     'spacing':[0.25,0.25,0.25,0.25,0.25,0.1,0.1,0.1,0.1,0.1,0.1,0.25,None,None],
     'datatype':['i2','i2','i1','i2','i2','i2','i1','i1','i1','i1','i1','i1','i4','i2'],
-    'scale_factor':[10,10,0.01,0.01,0.02,0.000005,None,0.01,0.01,0.01,0.01,None,None,0.0001],
+    'scale_factor':[10,10,0.01,0.01,0.02,0.000005,None,0.01,0.01,0.01,0.01,0.01,None,0.0001],
     }, index = pd.Index(['z500','z300','siconc','sst','t2m','transp','snowc','swvl1','swvl2','swvl3','swvl4','tcc','clustid','correlation'], name = 'varname'))
 variable_formats['fill_value'] = variable_formats['datatype'].apply(lambda s: nc.default_fillvals[s])
 
@@ -159,24 +160,48 @@ class Reader(object):
     Netcdf object to read a netcdf file with a desired precision
     xarray open_dataarray standard provides .data as float 32. Here I want to go to float16.
     """
-    def __init__(self, datapath: Path, ncvarname: str, groupname: str = None):
+    def __init__(self, datapath: Path, ncvarname: str = None, groupname: str = None):
         """
         Possibility to supply a hierarchical group for inside the netCDF4 file. 
+        ncvarname is not a neccesity if it is a dataarray and not a dataset, it is discovered through xarray otherwise
         """
         self.datapath = datapath
         self.groupname = groupname
         self.ncvarname = ncvarname
 
-    def read(self, dtype: type = np.float16, blocksize: int = 100):
+    def get_info(self):
         """
-        Only the data reading is taken over from xarray. Coords, dims and encoding not
+        Get additional information by using xarray
         """
+        temp = xr.open_dataarray(self.datapath, group = self.groupname)
+        for attrname in ['dims','attrs','size','coords','encoding', 'name']:
+            setattr(self, attrname, getattr(temp, attrname))
+        logging.debug(f'Reader retrieved info from netcdf at {self.datapath}')
+
+    def read(self, into_shared: bool = True, dtype: type = np.float32, blocksize: int = 1000):
+        """
+        Only the data reading is taken over from xarray. Coords, dims and encoding not, these become class attributes
+        Either reads into a numpy array, and returns that
+        or reads into a shared memory object, and returns that, other info becomes attributes
+        """
+        # Storing additional information. By using xarray
+        self.get_info()
+        self.dtype = dtype
+        if self.ncvarname is None:
+            self.ncvarname = self.name
+        else:
+            self.name = self.ncvarname
+        
         with nc.Dataset(self.datapath, mode='r') as presentset:
             if isinstance(self.groupname, str):
                 presentset = presentset[self.groupname] # Move one level down
 
             self.shape = presentset[self.ncvarname].shape
-            self.values = np.full(shape = self.shape, fill_value = np.nan, dtype = dtype)
+            if into_shared:
+                sharedvalues = mp.RawArray(get_corresponding_ctype(dtype), size_or_initializer=self.size)
+                values = np.frombuffer(sharedvalues, dtype=self.dtype).reshape(self.shape)
+            else:
+                values = np.full(shape = self.shape, fill_value = np.nan, dtype = dtype)
             presentset[self.ncvarname].set_auto_maskandscale(True) # Default but nice to have explicit that masked arrays are returned (at least, when missing values are present, see also comment below)
             starts = np.arange(0,self.shape[0], blocksize)
             for count, start in enumerate(starts):
@@ -192,15 +217,10 @@ class Reader(object):
                     block = block.filled(np.nan)
                 except AttributeError:
                     pass
-                self.values[blockslice,...] = block
+                values[blockslice,...] = block
                 logging.debug(f'Reader succesfully read block {count} size {blocksize} from the netcdf')
-
-        # Storing additional information. By using xarray
-        self.dtype = dtype
-        self.name = self.ncvarname
-        temp = xr.open_dataarray(self.datapath, group = self.groupname)
-        for attrname in ['dims','attrs','size','coords','encoding']:
-            setattr(self, attrname, getattr(temp, attrname))
-
-
             
+        if into_shared:
+            return sharedvalues
+        else:
+            return values

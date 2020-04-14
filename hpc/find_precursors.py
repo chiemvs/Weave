@@ -37,6 +37,7 @@ files = [ f.parts[-1] for f in ANOMDIR.glob('*anom.nc') if f.is_file()]
 # Don't do the snowcover and response itself
 files.remove('t2m_europe.anom.nc')
 files.remove('snowc_nhmin.anom.nc')
+files.remove('tcc_europe.anom.nc')
 
 timeaggs = [1, 3, 5, 7, 9, 11, 15] # Block aggregations.
 # Open a precursor array
@@ -44,21 +45,21 @@ for timeagg in timeaggs:
     # Determine the lags as a multiple of the timeagg
     laglist = list(timeagg * np.arange(1,11))
     # Aggregate the response, subset and detrend
-    responseagg = agg_time(array = reduced, ndayagg = timeagg, method = 'mean', rolling = False)
+    responseagg = agg_time(array = reduced, ndayagg = timeagg, method = 'mean', rolling = False, firstday = pd.Timestamp('1981-01-01'))
     summersubset = responseagg[responseagg.time.dt.season == 'JJA']
     summersubset.values = detrend(summersubset.values)
     for inputfile in files:
         # Investigate the precursors
         name = inputfile.split('.')[0]
         varname = name.split('_')[0]
-        ta = TimeAggregator(datapath = ANOMDIR / inputfile, share_input = True)
-        mean = ta.compute(nprocs = NPROC, ndayagg = timeagg, method = 'mean', firstday = pd.Timestamp(responseagg.time[0].values), rolling = False)
-        ac = Associator(responseseries = summersubset, data = mean, laglist = laglist)
-        del ta, mean
-        corr = ac.compute(NPROC, alpha = 0.05)
         outpath = OUTDIR / '.'.join([name,str(timeagg),'corr','nc'])
-        print(outpath)
-        w = Writer(outpath, varname = corr.name)
-        w.create_dataset(example = corr)
-        w.write(array = corr, attrs = corr.attrs, units = '')
-        del ac, corr, w
+        if not outpath.exists():
+            ta = TimeAggregator(datapath = ANOMDIR / inputfile, share_input = True)
+            mean = ta.compute(nprocs = NPROC, ndayagg = timeagg, method = 'mean', firstday = pd.Timestamp(responseagg.time[0].values), rolling = False)
+            ac = Associator(responseseries = summersubset, data = mean, laglist = laglist)
+            del ta, mean
+            corr = ac.compute(NPROC, alpha = 0.05)
+            w = Writer(outpath, varname = corr.name)
+            w.create_dataset(example = corr)
+            w.write(array = corr, attrs = corr.attrs, units = '')
+            del ac, corr, w

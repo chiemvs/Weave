@@ -102,15 +102,21 @@ class Computer(object):
     def __init__(self, datapath: Path = None, group: str = None, ncvarname: str = None, share_input: bool = True, reduce_input: bool = False, data: xr.DataArray = None):
         """
         Opening data with xarray has not the ability to read with less precision
-        always float32. Therefore if reduce_input is chosen, then the writer class is instructed to read with precision float16
-        Also has the option to be supplied with an already loaded array (called data)
+        Therefore we standard use the custom reader, to which a precision can be supplied.
+        if reduce_input is chosen, then the writer class is instructed to read with precision float16, otherwise float32
+        There is a choice to share the input ot not share the input
+        Also has the option to be supplied with an already loaded array (called data). Can again be shared or not.
         """
         if data is None:
-            if reduce_input:
-                data = Reader(datapath = datapath, ncvarname = ncvarname, groupname = group)
-                data.read(dtype = np.float16) # This object now has similar attributes as an xr.DataArray, just values of a different precision
+            data = Reader(datapath = datapath, ncvarname = ncvarname, groupname = group)# This object has similar attributes as an xr.DataArray, only no values, these are returned upon reading, with desired precision
+            self.inarray = data.read(into_shared = share_input, dtype = np.float16 if reduce_input else np.float32) 
+        else:
+            if share_input:
+                self.inarray = mp.RawArray(get_corresponding_ctype(data.dtype), size_or_initializer=data.size)
+                inarray_np = np.frombuffer(self.inarray, dtype=data.dtype)
+                np.copyto(inarray_np, data.values.reshape((data.size,)))
             else:
-                data = xr.open_dataarray(datapath, group = group)
+                self.inarray = data.values
         assert data.dims[0] == 'time'
         self.coords = data.coords
         self.dims = data.dims
@@ -121,13 +127,7 @@ class Computer(object):
         self.encoding = data.encoding
         self.share_input = share_input
         self.shape = data.shape
-        if self.share_input:
-            self.inarray = mp.RawArray(get_corresponding_ctype(self.dtype), size_or_initializer=data.size)
-            inarray_np = np.frombuffer(self.inarray, dtype=self.dtype)
-            np.copyto(inarray_np, data.values.reshape((data.size,)))
-        else:
-            self.inarray = data.values
-        logging.info(f'Computer placed inarray of dimension {self.shape} in memory, shared = {self.share_input}')
+        logging.info(f'Computer placed inarray of dimension {self.shape} in memory, shared = {self.share_input}, dtype = {self.dtype}')
         self.doyaxis = data.coords['time'].dt.dayofyear.values
         self.maxdoy = 366
 
@@ -147,7 +147,7 @@ class ClimateComputer(Computer):
         coords.update({'doy':doys})
         results = xr.DataArray(data = np.stack(results, axis = 0), dims = ('doy',) + self.dims[1:], coords = coords, name = self.name) # delivers the array concatenated along the zeroth doy-dimension.
         results.attrs = self.attrs
-        logging.info(f'ClimateComputer stacked all doys along zeroth axis, returning xr.DataArray of shape {results.shape}')
+        logging.info(f'ClimateComputer stacked all doys along zeroth axis, returning xr.DataArray of shape {results.shape} with dtype {results.dtype}')
         return results
 
     
@@ -166,7 +166,7 @@ class AnomComputer(Computer):
             assert (self.coords[dim].values == climate.coords[dim].values).all()
         # Preparing and sharing the output
         self.outarray = mp.RawArray(get_corresponding_ctype(self.dtype), size_or_initializer=self.size)
-        logging.info(f'AnomComputer placed outarray of dimension {self.shape} in shared memory')
+        logging.info(f'AnomComputer placed outarray of dimension {self.shape} in shared memory, dtype = {self.dtype}')
 
     def compute(self, nprocs):
         """
@@ -187,7 +187,7 @@ class AnomComputer(Computer):
         np_outarray = np.frombuffer(self.outarray, dtype = self.dtype).reshape(self.shape) # For shared Ctype arrays
         result = xr.DataArray(np_outarray, dims = self.dims, coords = self.coords, name = '-'.join([self.name, 'anom']))
         result.attrs = self.attrs
-        logging.info(f'AnomComputer added coordinates and attributes to anom outarray with shape {result.shape} and will return as xr.DataArray')
+        logging.info(f'AnomComputer added coordinates and attributes to anom outarray with shape {result.shape} and will return as xr.DataArray with dtype {result.dtype}')
         return result
 
 class TimeAggregator(Computer):
@@ -203,7 +203,7 @@ class TimeAggregator(Computer):
         assert (np.diff(self.coords['time']) == np.timedelta64(1,'D')).all(), "Time axis should be continuous daily to be allegible for aggregation"
         # Preparing and sharing the output
         self.outarray = mp.RawArray(get_corresponding_ctype(self.dtype), size_or_initializer=self.size)
-        logging.info(f'TimeAggregator placed outarray of dimension {self.shape} in shared memory')
+        logging.info(f'TimeAggregator placed outarray of dimension {self.shape} in shared memory, dtype = {self.dtype}')
 
     def compute(self, nprocs, ndayagg: int = 1, method: str = 'mean', firstday: pd.Timestamp = None, rolling: bool = False):
         """
@@ -238,7 +238,6 @@ class TimeAggregator(Computer):
         coords['time'] = coords['time'][time_axis_indices]
         result = xr.DataArray(np_outarray, dims = self.dims, coords = coords, name = '-'.join([self.name, str(ndayagg), 'roll' if rolling else 'nonroll', method]))
         result.attrs = self.attrs
-        logging.info(f'TimeAggregator added coordinates and attributes to aggregated outarray with shape {result.shape} and will return as xr.DataArray')
+        logging.info(f'TimeAggregator added coordinates and attributes to aggregated outarray with shape {result.shape} and will return as xr.DataArray with dtype {result.dtype}')
         return result
-
 
