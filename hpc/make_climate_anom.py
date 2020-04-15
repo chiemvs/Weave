@@ -27,7 +27,7 @@ if __name__ == '__main__':
     # ERA5 variables present in the data directory
     files = [ f.parts[-1] for f in OBSDIR.glob('*.nc') if f.is_file()]
     
-    for inputfile in ['snowc_nhmin.nc']:
+    for inputfile in ['tcc_europe.nc']:
         name = inputfile.split('.')[0]
         varname = name.split('_')[0]
         # Discover the group
@@ -35,7 +35,7 @@ if __name__ == '__main__':
             group = list(dat.groups.keys())[0]
         ncvarname = '-'.join([varname, group])
 
-        cc = ClimateComputer(datapath = OBSDIR / inputfile, group = group, ncvarname = ncvarname, share_input = False, reduce_input = True)
+        cc = ClimateComputer(datapath = OBSDIR / inputfile, group = group, ncvarname = ncvarname, share_input = True, reduce_input = False)
         clim = cc.compute(nprocs = NPROC)
         w = Writer(datapath = OUTDIR / '.'.join([name,'clim','nc']), varname = varname, ncvarname = clim.name) # Written without group structure
         w.create_dataset(example = clim)
@@ -43,7 +43,7 @@ if __name__ == '__main__':
         del cc # Too memory intensive to keep around
         #clim = xr.open_dataarray(OUTDIR / '.'.join([name,'clim','nc']))
         
-        ac = AnomComputer(datapath = OBSDIR / inputfile, group = group, share_input = False, ncvarname = ncvarname, reduce_input = True, climate = clim)
+        ac = AnomComputer(datapath = OBSDIR / inputfile, group = group, share_input = True, ncvarname = ncvarname, reduce_input = False, climate = clim)
         anom = ac.compute(nprocs = NPROC)
         w = Writer(datapath = OUTDIR / '.'.join([name,'anom','nc']), varname = varname, ncvarname = anom.name)
         w.create_dataset(example = anom)
