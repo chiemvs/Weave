@@ -77,12 +77,6 @@ class Associator(Computer):
         """
         Computer.__init__(self, share_input=True, data = data) # Fills a shared array at self.inarray
 
-        # Prepare all spatial coordinates of the cells, to map our function over
-        # Has to produce tuples of (coord_dim1, coord_dim2), skipping the zeroth time dim
-        #spatcoords = tuple(self.coords[dim].values for dim in self.dims[1:])
-        #self.coordtuples = itertools.product(*spatcoords)
-        spatdimlengths = tuple(list(range(length)) for length in self.shape[1:])
-        self.indextuples = itertools.product(*spatdimlengths)
 
         self.laglist = laglist
         self.asofunc = association
@@ -97,9 +91,14 @@ class Associator(Computer):
         logging.info(f'Associator placed outarray of dimension {self.outshape} in shared memory')
 
     def compute(self, nprocs, alpha: float = 0.05):
-        # Prepare all the associated spatial coordinates
+        # Prepare all spatial coordinates of the cells, to map our function over
+        # Has to produce tuples of (coord_dim1, coord_dim2), skipping the zeroth time dim
+        #spatcoords = tuple(self.coords[dim].values for dim in self.dims[1:])
+        #self.coordtuples = itertools.product(*spatcoords)
+        spatdimlengths = tuple(list(range(length)) for length in self.shape[1:])
+        indextuples = itertools.product(*spatdimlengths)
         with mp.Pool(processes = nprocs, initializer=init_worker, initargs=(self.inarray, self.dtype, self.shape, self.coords['time'], self.responseseries, self.outarray, self.outdtype, self.outshape, self.laglist, self.asofunc)) as pool:
-            results = pool.map(lag_subset_detrend_associate,self.indextuples)
+            results = pool.map(lag_subset_detrend_associate,indextuples)
 
         # Reconstruction from shared out array
         np_outarray = np.frombuffer(self.outarray, dtype = self.outdtype).reshape(self.outshape) # For shared Ctype arrays
@@ -126,5 +125,6 @@ class Associator(Computer):
             coords.update({dim:self.coords[dim].values})
         corr = xr.DataArray(np.ma.masked_array(data = np_outarray[:,0,...], mask = mask), dims = dims, coords = coords, name = 'correlation')
         corr.attrs = self.attrs
+        Computer.cleanup(self)
         return corr
 

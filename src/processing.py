@@ -103,13 +103,13 @@ class Computer(object):
         """
         Opening data with xarray has not the ability to read with less precision
         Therefore we standard use the custom reader, to which a precision can be supplied.
-        if reduce_input is chosen, then the writer class is instructed to read with precision float16, otherwise float32
+        if reduce_input is chosen, then the writer class is instructed to read with precision float16, otherwise float32, and also to flatten the spatial dimension, discarding spatial points with a full nan first zeroth axis nan block
         There is a choice to share the input ot not share the input
         Also has the option to be supplied with an already loaded array (called data). Can again be shared or not.
         """
         if data is None:
             data = Reader(datapath = datapath, ncvarname = ncvarname, groupname = group)# This object has similar attributes as an xr.DataArray, only no values, these are returned upon reading, with desired precision
-            self.inarray = data.read(into_shared = share_input, dtype = np.float16 if reduce_input else np.float32) 
+            self.inarray = data.read(into_shared = share_input, dtype = np.float16 if reduce_input else np.float32, flatten = reduce_input) 
         else:
             if share_input:
                 self.inarray = mp.RawArray(get_corresponding_ctype(data.dtype), size_or_initializer=data.size)
@@ -131,6 +131,16 @@ class Computer(object):
         self.doyaxis = data.coords['time'].dt.dayofyear.values
         self.maxdoy = 366
 
+    def cleanup(self):
+        """
+        Delete some potentially very large objects
+        """
+        for attrkey in ['inarray','outarray']:
+            try:
+                delattr(self, attrkey)
+            except AttributeError:
+                pass
+
 class ClimateComputer(Computer):
     """
     Output is never shared as it is only a small array. One spatial field per doy, with a maximum of 366
@@ -148,6 +158,7 @@ class ClimateComputer(Computer):
         results = xr.DataArray(data = np.stack(results, axis = 0), dims = ('doy',) + self.dims[1:], coords = coords, name = self.name) # delivers the array concatenated along the zeroth doy-dimension.
         results.attrs = self.attrs
         logging.info(f'ClimateComputer stacked all doys along zeroth axis, returning xr.DataArray of shape {results.shape} with dtype {results.dtype}')
+        Computer.cleanup(self)
         return results
 
     
@@ -188,6 +199,7 @@ class AnomComputer(Computer):
         result = xr.DataArray(np_outarray, dims = self.dims, coords = self.coords, name = '-'.join([self.name, 'anom']))
         result.attrs = self.attrs
         logging.info(f'AnomComputer added coordinates and attributes to anom outarray with shape {result.shape} and will return as xr.DataArray with dtype {result.dtype}')
+        Computer.cleanup(self)
         return result
 
 class TimeAggregator(Computer):
@@ -239,5 +251,6 @@ class TimeAggregator(Computer):
         result = xr.DataArray(np_outarray, dims = self.dims, coords = coords, name = '-'.join([self.name, str(ndayagg), 'roll' if rolling else 'nonroll', method]))
         result.attrs = self.attrs
         logging.info(f'TimeAggregator added coordinates and attributes to aggregated outarray with shape {result.shape} and will return as xr.DataArray with dtype {result.dtype}')
+        Computer.cleanup(self)
         return result
 

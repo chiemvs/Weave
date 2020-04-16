@@ -158,9 +158,11 @@ class Writer(object):
 class Reader(object):
     """
     Netcdf object to read a netcdf file with a desired precision
-    xarray open_dataarray standard provides .data as float 32. Here I want to go to float16.
+    xarray open_dataarray standard provides .data as float 32. Here I want to possibly go to float16.
+    Also I want to have the option to flatten the spatial dimensions into one,
+    discarding nans, for instance ocean cells in ERA5-Land datasets
     """
-    def __init__(self, datapath: Path, ncvarname: str = None, groupname: str = None):
+    def __init__(self, datapath: Path, ncvarname: str = None, groupname: str = None, blocksize: int = 1000):
         """
         Possibility to supply a hierarchical group for inside the netCDF4 file. 
         ncvarname is not a neccesity if it is a dataarray and not a dataset, it is discovered through xarray otherwise
@@ -168,24 +170,36 @@ class Reader(object):
         self.datapath = datapath
         self.groupname = groupname
         self.ncvarname = ncvarname
+        self.blocksize = blocksize
 
-    def get_info(self):
+    def get_info(self, flatten: bool = False):
         """
         Get additional information by using xarray
+        If spatial dims are flattened, then coordinates and size change.
         """
         temp = xr.open_dataarray(self.datapath, group = self.groupname)
         for attrname in ['dims','attrs','size','coords','encoding', 'name']:
             setattr(self, attrname, getattr(temp, attrname))
-        logging.debug(f'Reader retrieved info from netcdf at {self.datapath}')
+        if flatten and (len(self.dims) > 2):
+            block = temp[:self.blocksize,...].stack({'stacked':temp.dims[1:]}).dropna(dim = 'stacked', how = 'all')
+            self.dims = block.dims
+            bds = block.coords.to_dataset() # Gets the stacked coordinates in there, but zeroth timeaxis is incomplete due to the blocksize, therefore we take time from former
+            self.coords = bds.assign_coords(**{self.dims[0]:temp.coords[self.dims[0]]}).coords
+            self.size = len(self.coords[self.dims[0]]) * len(self.coords[self.dims[1]])
 
-    def read(self, into_shared: bool = True, dtype: type = np.float32, blocksize: int = 1000):
+        logging.debug(f'Reader retrieved info from netcdf at {self.datapath}, flatten: {flatten}')
+        
+
+    def read(self, into_shared: bool = True, flatten: bool = False, dtype: type = np.float32):
         """
         Only the data reading is taken over from xarray. Coords, dims and encoding not, these become class attributes
         Either reads into a numpy array, and returns that
         or reads into a shared memory object, and returns that, other info becomes attributes
+        Flattening is based on dropping completely empty time slices in the first block
+        Only possible when 2+ dimensions
         """
         # Storing additional information. By using xarray
-        self.get_info()
+        self.get_info(flatten = flatten)
         self.dtype = dtype
         if self.ncvarname is None:
             self.ncvarname = self.name
@@ -196,29 +210,42 @@ class Reader(object):
             if isinstance(self.groupname, str):
                 presentset = presentset[self.groupname] # Move one level down
 
-            self.shape = presentset[self.ncvarname].shape
+            presentset[self.ncvarname].set_auto_maskandscale(True) # Default but nice to have explicit that masked arrays are returned (at least, when missing values are present, see also comment below)
+            if flatten and (len(presentset[self.ncvarname].shape) > 2):
+                testblock = presentset[self.ncvarname][:self.blocksize,...] # Not sure that always masked arrays are returned (see comment below)
+                try:
+                    non_nans_ind = np.where(~testblock.mask.all(axis = 0))# Tuple with arrays of indices for the to-be-flattened spatial dimensions
+                except AttributeError:
+                    non_nans_ind = np.where(~np.isnan(testblock).all(axis = 0))
+                assert len(self.coords['stacked']) == len(non_nans_ind[0]) # Make sure that the amount of retained coordinates in the same as the amount of retained cells
+                self.shape = presentset[self.ncvarname].shape[:1] + (len(self.coords['stacked']),)
+            else:
+                non_nans_ind = (slice(None),) * len(self.dims[1:]) # (slice(None),slice(None)) for two spatial dims
+                self.shape = presentset[self.ncvarname].shape
+            
+            # Prepare the array to be returned (possibly in already flattened shape)
             if into_shared:
                 sharedvalues = mp.RawArray(get_corresponding_ctype(dtype), size_or_initializer=self.size)
                 values = np.frombuffer(sharedvalues, dtype=self.dtype).reshape(self.shape)
             else:
                 values = np.full(shape = self.shape, fill_value = np.nan, dtype = dtype)
-            presentset[self.ncvarname].set_auto_maskandscale(True) # Default but nice to have explicit that masked arrays are returned (at least, when missing values are present, see also comment below)
-            starts = np.arange(0,self.shape[0], blocksize)
+            starts = np.arange(0,self.shape[0], self.blocksize)
             for count, start in enumerate(starts):
                 # Read a scaled block by slice
                 if count == len(starts) - 1: # Last start, write everything that remains
                     blockslice = slice(start,None,None)
                 else:
-                    blockslice = slice(start,(start+blocksize),None)
-                block = presentset[self.ncvarname][blockslice,...].astype(dtype)
+                    blockslice = slice(start,(start+self.blocksize),None)
+                block = presentset[self.ncvarname][blockslice,...][(slice(None),) + non_nans_ind].astype(dtype)
                 # This block is either a masked array is returned or a regular numpy array when no missing values are found (Unfortunately only in netCDF4 version of 1.4+ we can regulate the behaviour of always returning a masked array)
+                # We only use the non_nans_ind on the numpy block, with a possible flattening as the result. netCDF4 cannot handle the tuples with arrays
                 # Therefore we convert
                 try:
                     block = block.filled(np.nan)
                 except AttributeError:
                     pass
                 values[blockslice,...] = block
-                logging.debug(f'Reader succesfully read block {count} size {blocksize} from the netcdf')
+                logging.debug(f'Reader succesfully read block {count} size {self.blocksize} from the netcdf')
             
         if into_shared:
             return sharedvalues
