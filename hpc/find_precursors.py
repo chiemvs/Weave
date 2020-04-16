@@ -9,6 +9,7 @@ import xarray as xr
 import pandas as pd
 from pathlib import Path
 from scipy.signal import detrend
+from scipy.stats import spearmanr, pearsonr
 
 TMPDIR = Path(sys.argv[1])
 PACKAGEDIR = sys.argv[2] 
@@ -24,19 +25,21 @@ from Weave.src.association import Associator
 from Weave.src.inputoutput import Writer
 from Weave.src.utils import agg_time
 
-logging.basicConfig(filename= TMPDIR / 'testprecursor_snowc.log', filemode='w', level=logging.DEBUG, format='%(process)d-%(relativeCreated)d-%(message)s')
+#logging.basicConfig(filename= TMPDIR / 'testprecursor_snowc.log', filemode='w', level=logging.DEBUG, format='%(process)d-%(relativeCreated)d-%(message)s')
+logging.basicConfig(filename= TMPDIR / 'testprecursor_spearman.log', filemode='w', level=logging.DEBUG, format='%(process)d-%(relativeCreated)d-%(message)s')
 # Open a response timeseries. And extract a certain cluster with a cluster template
 response = xr.open_dataarray(ANOMDIR / 't2m_europe.anom.nc')
 clusterfield = xr.open_dataarray(CLUSTERDIR / 't2m-q095.nc').sel(nclusters = 14)
 reduced = response.groupby(clusterfield).mean('stacked_latitude_longitude')
 reduced = reduced.sel(clustid = 9) # In this case cluster 9 is western europe.
 response.close()
+del response
 
 # Scan for present anomaly files. 
 files = [ f.parts[-1] for f in ANOMDIR.glob('*anom.nc') if f.is_file()]
 # Don't do the response itself
 files.remove('t2m_europe.anom.nc')
-#files.remove('snowc_nhmin.anom.nc')
+files.remove('snowc_nhmin.anom.nc') # Currently still not able to handle snowcover, too large for parallel association.
 
 timeaggs = [1, 3, 5, 7, 9, 11, 15] # Block aggregations.
 # Open a precursor array
@@ -56,7 +59,7 @@ for timeagg in timeaggs:
             ta = TimeAggregator(datapath = ANOMDIR / inputfile, share_input = True, reduce_input = (varname == 'snowc'))
             mean = ta.compute(nprocs = NPROC, ndayagg = timeagg, method = 'mean', firstday = pd.Timestamp(responseagg.time[0].values), rolling = False)
             del ta
-            ac = Associator(responseseries = summersubset, data = mean, laglist = laglist)
+            ac = Associator(responseseries = summersubset, data = mean, laglist = laglist, association = spearmanr)
             del mean
             corr = ac.compute(NPROC, alpha = 0.05)
             w = Writer(outpath, varname = corr.name)

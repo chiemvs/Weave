@@ -13,15 +13,15 @@ import multiprocessing as mp
 import pandas as pd
 import logging
 import itertools
-from scipy.stats import pearsonr
 from scipy.signal import detrend
 from statsmodels.stats.multitest import multipletests 
+from typing import Callable
 from .utils import get_corresponding_ctype
 from .processing import Computer
 
 var_dict = {}
 
-def init_worker(inarray, dtype, shape, intimeaxis, responseseries, outarray, outdtype, outshape, laglist):
+def init_worker(inarray, dtype, shape, intimeaxis, responseseries, outarray, outdtype, outshape, laglist, asofunc):
     var_dict['inarray'] = inarray
     var_dict['dtype'] = dtype
     var_dict['shape'] = shape
@@ -31,6 +31,7 @@ def init_worker(inarray, dtype, shape, intimeaxis, responseseries, outarray, out
     var_dict['outdtype'] = outdtype
     var_dict['outshape'] = outshape
     var_dict['laglist'] = laglist
+    var_dict['asofunc'] = asofunc # Association function like scipy.stats.spearmanr
     logging.debug('this initializer has populated a global dictionary')
 
 def lag_subset_detrend_associate(spatial_index: tuple):
@@ -61,16 +62,18 @@ def lag_subset_detrend_associate(spatial_index: tuple):
             subset = subset[~subset.isnull()] # Then we only retain non-nan. detrend and pearsonr cant handle them
             subset.values = detrend(subset) # Only a single axis, replace values. We need the non-nan timeaxis to also get a potentially reduced subset of the response
             out_index = (laglist.index(lag), slice(None)) + spatial_index # Remember the shape of (len(lagrange),2) + spatdims 
-            outarray[out_index] = pearsonr(var_dict['responseseries'].reindex_like(subset), subset) # Returns (corr,pvalue)
+            outarray[out_index] = var_dict['asofunc'](var_dict['responseseries'].reindex_like(subset), subset) # Asofunc should return (corr,pvalue)
 
 class Associator(Computer):
 
-    def __init__(self, responseseries: xr.DataArray, data: xr.DataArray, laglist: list):
+    def __init__(self, responseseries: xr.DataArray, data: xr.DataArray, laglist: list, association: Callable):
         """
         Is fed with an already loaded data array, this namely is an intermediate timeaggregated array
         Always shares the input array, such that it can be deleted after initialization
         responseseries should already be a 1D detrended subset
         laglist is how far to shift the data in number of days
+        Choice to supply the function that determines association between two timeseries
+        Should return (corr_float, p_value_float)
         """
         Computer.__init__(self, share_input=True, data = data) # Fills a shared array at self.inarray
 
@@ -82,6 +85,7 @@ class Associator(Computer):
         self.indextuples = itertools.product(*spatdimlengths)
 
         self.laglist = laglist
+        self.asofunc = association
         self.responseseries = responseseries
         # For each cell we are going to produce 2 association values, a strength and a significance
         # for each lag. The dimensions of the outarray therefore become (nlags, 2 ) + spatshape
@@ -94,7 +98,7 @@ class Associator(Computer):
 
     def compute(self, nprocs, alpha: float = 0.05):
         # Prepare all the associated spatial coordinates
-        with mp.Pool(processes = nprocs, initializer=init_worker, initargs=(self.inarray, self.dtype, self.shape, self.coords['time'], self.responseseries, self.outarray, self.outdtype, self.outshape, self.laglist)) as pool:
+        with mp.Pool(processes = nprocs, initializer=init_worker, initargs=(self.inarray, self.dtype, self.shape, self.coords['time'], self.responseseries, self.outarray, self.outdtype, self.outshape, self.laglist, self.asofunc)) as pool:
             results = pool.map(lag_subset_detrend_associate,self.indextuples)
 
         # Reconstruction from shared out array
