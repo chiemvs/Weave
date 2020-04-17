@@ -122,7 +122,7 @@ class Associator(Computer):
         coords = {'lag':self.laglist}
         dims = ('lag',) + self.dims[1:]
         for dim in self.dims[1:]:
-            coords.update({dim:self.coords[dim].values})
+            coords.update({dim:self.coords[dim]})
         corr = xr.DataArray(np.ma.masked_array(data = np_outarray[:,0,...], mask = mask), dims = dims, coords = coords, name = 'correlation')
         corr.attrs = self.attrs
         Computer.cleanup(self)

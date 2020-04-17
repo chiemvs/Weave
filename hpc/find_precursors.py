@@ -25,8 +25,8 @@ from Weave.src.association import Associator
 from Weave.src.inputoutput import Writer
 from Weave.src.utils import agg_time
 
-#logging.basicConfig(filename= TMPDIR / 'testprecursor_snowc.log', filemode='w', level=logging.DEBUG, format='%(process)d-%(relativeCreated)d-%(message)s')
-logging.basicConfig(filename= TMPDIR / 'testprecursor_spearman.log', filemode='w', level=logging.DEBUG, format='%(process)d-%(relativeCreated)d-%(message)s')
+logging.basicConfig(filename= TMPDIR / 'testprecursor_snowc_pearson.log', filemode='w', level=logging.DEBUG, format='%(process)d-%(relativeCreated)d-%(message)s')
+#logging.basicConfig(filename= TMPDIR / 'testprecursor_spearman.log', filemode='w', level=logging.DEBUG, format='%(process)d-%(relativeCreated)d-%(message)s')
 # Open a response timeseries. And extract a certain cluster with a cluster template
 response = xr.open_dataarray(ANOMDIR / 't2m_europe.anom.nc')
 clusterfield = xr.open_dataarray(CLUSTERDIR / 't2m-q095.nc').sel(nclusters = 14)
@@ -39,7 +39,8 @@ del response
 files = [ f.parts[-1] for f in ANOMDIR.glob('*anom.nc') if f.is_file()]
 # Don't do the response itself
 files.remove('t2m_europe.anom.nc')
-files.remove('snowc_nhmin.anom.nc') # Currently still not able to handle snowcover, too large for parallel association.
+#files.remove('snowc_nhmin.anom.nc') # Currently still not able to handle snowcover, too large for parallel association.
+to_reduce = ['snowc'] # Variables that are reduced and stacked etc, such that they are not too large for parallel association
 
 timeaggs = [1, 3, 5, 7, 9, 11, 15] # Block aggregations.
 # Open a precursor array
@@ -56,12 +57,14 @@ for timeagg in timeaggs:
         varname = name.split('_')[0]
         outpath = OUTDIR / '.'.join([name,str(timeagg),'corr','nc'])
         if not outpath.exists():
-            ta = TimeAggregator(datapath = ANOMDIR / inputfile, share_input = True, reduce_input = (varname == 'snowc'))
+            ta = TimeAggregator(datapath = ANOMDIR / inputfile, share_input = True, reduce_input = (varname in to_reduce))
             mean = ta.compute(nprocs = NPROC, ndayagg = timeagg, method = 'mean', firstday = pd.Timestamp(responseagg.time[0].values), rolling = False)
             del ta
-            ac = Associator(responseseries = summersubset, data = mean, laglist = laglist, association = spearmanr)
+            ac = Associator(responseseries = summersubset, data = mean, laglist = laglist, association = pearsonr)
             del mean
             corr = ac.compute(NPROC, alpha = 0.05)
+            if varname in to_reduce:
+                corr = corr.unstack('stacked')
             w = Writer(outpath, varname = corr.name)
             w.create_dataset(example = corr)
             w.write(array = corr, attrs = corr.attrs, units = '')
