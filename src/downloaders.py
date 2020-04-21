@@ -17,7 +17,7 @@ import time
 from pathlib import Path
 from collections import OrderedDict
 from typing import Tuple, List, Dict
-from .inputoutput import Writer, variable_formats
+from .inputoutput import Writer, Reader, variable_formats
 from .utils import Region
 
 # Construction that downloads raw files (in parallel)
@@ -347,4 +347,58 @@ class DataOrganizer(object):
                 
             time.sleep(200)
             self.preprocessor.end()
+
+class DataMerger(object):
+    """
+    Designed to merge already pre-processed netcdf files (daily values)
+    It opens multiple readers and a single writer. Possible to supply weights when averaging
+    """
+    def __init__(self, inpaths: list, ingroups: list, outpath: Path, outvarname: str, region: Region, weights: list = None):
+        """
+        Needs a list of inpaths, a list of ingroups and a single outpath, potentially a list of weights with the same size
+        There is no constrained on the weight values as these are processed in
+        np.ma.average as: avg = sum(a * weights) / sum(weights)
+        Initializer also checks the information of arrays at inpaths
+        """
+        self.readers = [Reader(datapath = path, groupname = group) for path, group in zip(inpaths, ingroups)]
+        for reader in self.readers:
+            reader.get_info()
+        assert len(np.unique([r.size for r in self.readers])) == 1, 'not all input arrays have equal size'
+        self.weights = weights
+        if not self.weights is None:
+            assert len(self.weights) == len(self.readers), 'weights unequal in length to readers'
+
+        try:
+            self.units = self.readers[0].attrs['units']
+        except AttributeError:
+            self.units = None
+
+        self.writer = Writer(datapath = outpath, varname = outvarname, region = region) 
+        self.writer.create_dataset(dimensions = self.readers[0].dims)
+
+    def merge(self):
+        """
+        Establishes the length of the time dimension will call the merging at each
+        stamp along those zeroth axes.
+        """
+        def process_one_day(index: int):
+            """
+            Reads for one single timestep at the index all the fields and averages them.
+            Missing values are handled in a masked fashion
+            """
+            fields = [None] * len(self.readers)
+            dates = [None] * len(self.readers)
+            for i, reader in enumerate(self.readers):
+                dates[i], fields[i] = reader.read_one_day(index)
+            assert len(np.unique(dates)) == 1, f"unequal times read at index {index}"
+
+            averaged = np.ma.average(np.ma.stack(fields, axis = 0), axis = 0, weights = self.weights)
+            self.writer.append_one_day(writedate = dates[0], dayfield = averaged, index = index, units = self.units)
+
+        for index in range(len(self.readers[0].coords['time'])):
+            process_one_day(index = index)
+
+        if not self.weights is None:
+            self.writer.write_attrs({'weights':str(self.weights)})
+        logging.info(f'All values have been merged by averaging with weights: {self.weights}')
 

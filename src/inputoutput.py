@@ -28,10 +28,10 @@ std_dimension_formats = {
         'attrs':{'units':'days'}}}
 
 variable_formats = pd.DataFrame(data = {
-    'spacing':[0.25,0.25,0.25,0.25,0.25,0.1,0.1,0.1,0.1,0.1,0.1,0.25,None,None],
-    'datatype':['i2','i2','i1','i2','i2','i2','i1','i1','i1','i1','i1','i1','i4','i2'],
-    'scale_factor':[10,10,0.01,0.01,0.02,0.000005,None,0.01,0.01,0.01,0.01,0.01,None,0.0001],
-    }, index = pd.Index(['z500','z300','siconc','sst','t2m','transp','snowc','swvl1','swvl2','swvl3','swvl4','tcc','clustid','correlation'], name = 'varname'))
+    'spacing':[0.25,0.25,0.25,0.25,0.25,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.25,None,None],
+    'datatype':['i2','i2','i1','i2','i2','i2','i1','i1','i1','i1','i1','i1','i1','i4','i2'],
+    'scale_factor':[10,10,0.01,0.01,0.02,0.000005,None,0.01,0.01,0.01,0.01,0.01,0.01,None,0.0001],
+    }, index = pd.Index(['z500','z300','siconc','sst','t2m','transp','snowc','swvl1','swvl2','swvl3','swvl4','swvl13','tcc','clustid','correlation'], name = 'varname'))
 variable_formats['fill_value'] = variable_formats['datatype'].apply(lambda s: nc.default_fillvals[s])
 
 class Writer(object):
@@ -150,11 +150,18 @@ class Writer(object):
                 setattr(presentset[self.ncvarname], 'units',units)
             # Setting additional attributes (if not yet present)
             if attrs:
-                for key in attrs.keys():
-                    if not hasattr(presentset[self.ncvarname], key):
-                        setattr(presentset[self.ncvarname], key, attrs[key])
+                self.write_attrs(attrs = attrs)
 
+    def write_attrs(self, attrs: dict):
+        with nc.Dataset(self.datapath, mode='a') as presentset:
+            if isinstance(self.groupname, str):
+                presentset = presentset[self.groupname] # Move one level down
         
+            for key in attrs.keys():
+                if not hasattr(presentset[self.ncvarname], key):
+                    setattr(presentset[self.ncvarname], key, attrs[key])
+
+
 class Reader(object):
     """
     Netcdf object to read a netcdf file with a desired precision
@@ -187,8 +194,32 @@ class Reader(object):
             self.coords = bds.assign_coords(**{self.dims[0]:temp.coords[self.dims[0]]}).coords
             self.size = len(self.coords[self.dims[0]]) * len(self.coords[self.dims[1]])
 
+        if self.ncvarname is None:
+            self.ncvarname = self.name
+        else:
+            self.name = self.ncvarname
+
         logging.debug(f'Reader retrieved info from netcdf at {self.datapath}, flatten: {flatten}')
         
+    def read_one_day(self, index: int) -> tuple:
+        """
+        Reads a one day field at the desired index along the zeroth timeaxis. 
+        This field can be of type masked array
+        And returns it with associated datestamp
+        """
+        with nc.Dataset(self.datapath, mode='r') as presentset:
+            if isinstance(self.groupname, str):
+                presentset = presentset[self.groupname] # Move one level down
+            # Start appending along the time axis
+            presentset[self.ncvarname].set_auto_maskandscale(True) # Default but nice to have explicit that masked arrays are returned (at least, when missing values are present)
+            try:
+                dayfield = presentset[self.ncvarname][index,...]
+                datestamp = nc.num2date(presentset['time'][index], units = presentset['time'].units, calendar = presentset['time'].calendar)
+                logging.debug(f'Reader has succesfully read {datestamp} from the netcdf')
+                return (datestamp, dayfield)
+            except IndexError: # Index out of range
+                logging.debug(f'Reader could not find index {index} along zeroth axis')
+                return (None, None)
 
     def read(self, into_shared: bool = True, flatten: bool = False, dtype: type = np.float32):
         """
@@ -201,10 +232,6 @@ class Reader(object):
         # Storing additional information. By using xarray
         self.get_info(flatten = flatten)
         self.dtype = dtype
-        if self.ncvarname is None:
-            self.ncvarname = self.name
-        else:
-            self.name = self.ncvarname
         
         with nc.Dataset(self.datapath, mode='r') as presentset:
             if isinstance(self.groupname, str):
