@@ -27,13 +27,17 @@ if __name__ == '__main__':
     # ERA5 variables present in the data directory
     files = [ f.parts[-1] for f in OBSDIR.glob('*.nc') if f.is_file()]
     
-    for inputfile in ['tcc_europe.nc']:
+    for inputfile in ['swvl13_europe.nc']:
         name = inputfile.split('.')[0]
         varname = name.split('_')[0]
         # Discover the group
         with nc.Dataset(OBSDIR / inputfile, mode = 'r') as dat:
-            group = list(dat.groups.keys())[0]
-        ncvarname = '-'.join([varname, group])
+            try:
+                group = list(dat.groups.keys())[0]
+                ncvarname = '-'.join([varname, group])
+            except IndexError:
+                group = None
+                ncvarname = varname
 
         cc = ClimateComputer(datapath = OBSDIR / inputfile, group = group, ncvarname = ncvarname, share_input = True, reduce_input = False)
         clim = cc.compute(nprocs = NPROC)
