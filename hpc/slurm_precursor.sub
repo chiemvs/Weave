@@ -1,5 +1,5 @@
 #!/usr/bin/bash
-#SBATCH --job-name="rolling"
+#SBATCH --job-name="snowc"
 #SBATCH --nodelist=node242
 #SBATCH --cpus-per-task=32
 #SBATCH --time=60:00:00
@@ -7,5 +7,5 @@
 #SBATCH --output=../../python_%j.out
 #SBATCH --error=../../python_%j.err
 
-./start.sh ../requirements.txt ./find_precursors.py 31 $HOME/processed $HOME/clusters $HOME/correlation_roll_spearman
+./start.sh ../requirements.txt ./find_precursors.py 31 $HOME/processed $HOME/clusters $HOME/correlation_block_pearson
 # ./start.sh requirements.txt test_script.py NPARPROCS DIRECTORIES (can be many)
