@@ -31,6 +31,12 @@ def get_nhmin() -> Region:
     """
     return(Region("nhmin", 90, -180, 30, 180))
 
+def get_nhblock() -> Region:
+    """
+    Untill Equator, section that includes north america on the western and india on the eastern end
+    """
+    return(Region("nhblock", 90, -130, 0, 100))
+
 def get_corresponding_ctype(npdtype: type) -> type:
     simple_types = [ct.c_byte, ct.c_short, ct.c_int, ct.c_long, ct.c_longlong,
     ct.c_ubyte, ct.c_ushort, ct.c_uint, ct.c_ulong, ct.c_ulonglong,

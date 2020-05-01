@@ -30,11 +30,11 @@ class CDSDownloader(object):
         Evaporation from transformation has an ERA-Land issue and is stored under a different alias 
         """
         self.era_formats = pd.DataFrame(data = {
-            'variable':['geopotential','geopotential','sea_ice_cover','sea_surface_temperature','2m_temperature', 'evaporation_from_bare_soil', 'snow_cover','volumetric_soil_water_layer_1', 'volumetric_soil_water_layer_2', 'volumetric_soil_water_layer_3', 'volumetric_soil_water_layer_4','total_cloud_cover',],
-            'pressure_level':[500,300,None,None,None,None,None,None,None,None,None,None],
-            'setname':['reanalysis-era5-pressure-levels','reanalysis-era5-pressure-levels','reanalysis-era5-single-levels','reanalysis-era5-single-levels','reanalysis-era5-single-levels','reanalysis-era5-land','reanalysis-era5-land','reanalysis-era5-land','reanalysis-era5-land','reanalysis-era5-land','reanalysis-era5-land','reanalysis-era5-single-levels',],
-            'timevariable':['dataTime','dataTime','dataTime','dataTime','dataTime','endStep','forecastTime','dataTime','dataTime','dataTime','dataTime','dataTime',], # The relevant grib parameter in the files, depends on accumulated variable and ERA-Land or not
-            }, index = pd.Index(['z500','z300','siconc','sst','t2m','transp','snowc','swvl1','swvl2','swvl3','swvl4','tcc'], name = 'varname'))
+            'variable':['geopotential','geopotential','temperature','sea_ice_cover','sea_surface_temperature','2m_temperature', 'evaporation_from_bare_soil', 'snow_cover','volumetric_soil_water_layer_1', 'volumetric_soil_water_layer_2', 'volumetric_soil_water_layer_3', 'volumetric_soil_water_layer_4','total_cloud_cover',],
+            'pressure_level':[500,300,850,None,None,None,None,None,None,None,None,None,None],
+            'setname':['reanalysis-era5-pressure-levels','reanalysis-era5-pressure-levels','reanalysis-era5-pressure-levels','reanalysis-era5-single-levels','reanalysis-era5-single-levels','reanalysis-era5-single-levels','reanalysis-era5-land','reanalysis-era5-land','reanalysis-era5-land','reanalysis-era5-land','reanalysis-era5-land','reanalysis-era5-land','reanalysis-era5-single-levels',],
+            'timevariable':['dataTime','dataTime','dataTime','dataTime','dataTime','dataTime','endStep','forecastTime','dataTime','dataTime','dataTime','dataTime','dataTime',], # The relevant grib parameter in the files, depends on accumulated variable and ERA-Land or not
+            }, index = pd.Index(['z500','z300','t850','siconc','sst','t2m','transp','snowc','swvl1','swvl2','swvl3','swvl4','tcc'], name = 'varname'))
         self.era_formats = self.era_formats.join(variable_formats, how = 'left')
     
     def create_requests_and_populate_queue(self, downloaddates: pd.DatetimeIndex, request_kwds: dict) -> list:
