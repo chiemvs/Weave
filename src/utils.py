@@ -10,6 +10,7 @@ import xarray as xr
 import pandas as pd
 import ctypes as ct
 from collections import namedtuple
+from scipy.stats import rankdata, pearsonr, weightedtau
 
 Region = namedtuple("Region", ["name", "latmax","lonmin", "latmin", "lonmax"])
 
@@ -124,3 +125,30 @@ def agg_time(array: xr.DataArray, ndayagg: int = 1, method: str = 'mean', firstd
             array = array.isel(time = slice(0,-1,None)) # Remove the last aggregation, if it has not been based on the full ndayagg
 
     return array
+
+def rankdirection(x,y):
+    """
+    Returns a rank array (0 most important) with emphasis on negative x when negative relation
+    emphasis on positive x when positive overall relation
+    """
+    ranks = rankdata(x, method = 'ordinal')
+    if pearsonr(x = x, y = y)[0] < 0:
+        return ranks
+    else:
+        return ranks.max() - ranks
+
+def kendall_choice(responseseries: xr.DataArray, precursorseries: xr.DataArray) -> tuple:
+    """
+    Takes in two timeseries. computes weighted kendall tau. Weighting direction in terms of precursor ranks is chosen based on pearsons
+    Can be numpy arrays or xarray.
+    Significance is not implemented
+    """
+    corr, p_val = weightedtau(x = precursorseries, y = responseseries, rank=rankdirection(x = precursorseries, y = responseseries))
+    return(corr, 1e-9)
+
+def chi(responseseries: xr.DataArray, precursorseries: xr.DataArray) -> tuple:
+    """
+    Conversion to ECDF space.
+    """
+    pass
+
