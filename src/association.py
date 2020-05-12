@@ -47,7 +47,7 @@ def lag_subset_detrend_associate(spatial_index: tuple):
     if np.isnan(inarray).all(): # We are dealing with an empty cell
         logging.debug(f'Worker found empty cell at {spatial_index}, returning np.nan')
         out_index = (slice(None),slice(None)) + spatial_index
-        outarray[out_index] = np.nan
+        outarray[out_index] = np.nan # Writes np.nan both for the association strength and the significance.
     else:
         # Now inarray is a one dimensional numpy array, we need the original and series time coordinates to do the lagging
         intimeaxis = var_dict['intimeaxis']
@@ -128,3 +128,22 @@ class Associator(Computer):
         Computer.cleanup(self)
         return corr
 
+def composite1d(responseseries: xr.DataArray, precursorseries: xr.DataArray, quant: float):
+    indexer = responseseries > responseseries.quantile(quant)
+    mean = float(precursorseries.where(indexer, drop = True).mean())
+    return (mean, 1e-9) # Return a hardcoded significance. Only because that was how multiple testing worked.
+
+def composite(responseseries: xr.DataArray, data: xr.DataArray, quant: float = 0.9):
+    """
+    Basic function that subsets the supplied already loaded data array, along the first axis, based on exceedence of the quantile in the response timeseries.
+    Quantile can also be a list of quantiles
+    And returns the mean of that. No detrending (of data). Response could already have been detrended.
+    """
+    indexer = responseseries > responseseries.quantile(quant)
+    if isinstance(quant, list):
+        returns = [None] * len(quant)
+        for q in quant:
+            returns[quant.index(q)] = data.where(indexer.sel(quantile = q), drop = True).mean(dim = data.dims[0])
+        return(xr.concat(returns, dim = 'quantile'))
+    else:
+        return(data.where(indexer, drop = True).mean(dim = data.dims[0]))

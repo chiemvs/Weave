@@ -25,7 +25,9 @@ std_dimension_formats = {
     'clustid':{'encoding':{'datatype':'i4', 'fill_value':nc.default_fillvals['i4']},
         'attrs':{'units':''}},
     'lag':{'encoding':{'datatype':'i1', 'fill_value':nc.default_fillvals['i1']},
-        'attrs':{'units':'days'}}}
+        'attrs':{'units':'days'}},
+    'quantile':{'encoding':{'datatype':'f4', 'fill_value':nc.default_fillvals['f4']},
+        'attrs':{'units':''}}}
 
 variable_formats = pd.DataFrame(data = {
     'spacing':[0.25,0.25,0.25,0.25,0.25,0.25,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.25,None,None],
