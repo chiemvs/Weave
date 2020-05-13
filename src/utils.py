@@ -146,9 +146,49 @@ def kendall_choice(responseseries: xr.DataArray, precursorseries: xr.DataArray) 
     corr, p_val = weightedtau(x = precursorseries, y = responseseries, rank=rankdirection(x = precursorseries, y = responseseries))
     return(corr, 1e-9)
 
-def chi(responseseries: xr.DataArray, precursorseries: xr.DataArray) -> tuple:
+def chi(responseseries: xr.DataArray, precursorseries: xr.DataArray, nq: int = 100, qlim: tuple = None, alpha: float = 0.05, trunc: bool = True):
     """
-    Conversion to ECDF space.
+    modified from https://github.com/cran/texmex/blob/master/R/chi.R
+    Conversion to ECDF space. Computation of chi over a range of quantiles
     """
-    pass
+    assert len(responseseries) == len(precursorseries), '1D series should have equal length'
+    n = len(responseseries)
+    # To ecdf space [0-1]
+    t_method = 'ordinal' # for scipy.stats.rankdata, similar to 'first' for rank in R
+    ecdfx = rankdata(precursorseries, method = t_method)/(n+1) # Gumbel plotting position
+    ecdfy = rankdata(responseseries, method = t_method)/(n+1) # Gumbel plotting position
+
+    data = np.stack([ecdfx,ecdfy], axis = 1)
+    
+    rowmax = np.max(data, axis = 1) # Both X and Y are below this quantile
+    rowmin = np.min(data, axis = 1) # Both X and Y are above this quantile
+
+    # To check whether the desired quantile range can also be reliably estimated
+    eps = np.finfo('float64').eps
+    qlim_empirical = (min(rowmax) + eps, max(rowmin) - eps) # Eps gives necessary difference for two numbers to be numerically the same. This makes sure that always at least one data pair is simultaneously below the lower bount and simultaneously above the upper bound. (Avoids log(0)) 
+    if not qlim is None:
+        assert qlim_empirical[0] < qlim[0]
+        assert qlim_empirical[1] > qlim[1]
+        assert qlim[0] < qlim[1], 'upper limit should be higher than lower'
+    else:
+        qlim = qlim_empirical
+
+    # Construct the quantile range, at each point we will calculate chi and chibar
+    qs = np.linspace(qlim[0],qlim[1], num = nq)
+    # Broadcasting to a boolean smaller than array of shape (nq,n) and then mean over axis 1 to get (nq,)
+    prob_below = np.mean(rowmax[np.newaxis,:] < qs[:,np.newaxis], axis = 1)
+    prob_above = np.mean(rowmin[np.newaxis,:] > qs[:,np.newaxis], axis = 1)
+
+    chiq = 2 - np.log(prob_below)/np.log(qs)
+    chibarq = (2 * np.log(1-qs))/np.log(prob_above) - 1 # Limiting value 1 means asymptotic dependence --> look at chi. Limiting value less then one means asymptotic independence. --> chi irrelevant
+
+    # Estimate the standard error (variance), assumes independence of observations
+    #chiqvar = ((1/np.log(qs)**2)/qs * (1-qs))/n
+    #chibarqvar = (((4 * np.log(1-qs)**2)/(np.log(chibarq)**4 * chibarq**2)) * chibarq * (1-chibarq))/n
+
+    # We basically want to get the dependence strengt for those pairs that are asymptotically dependent. 
+    if chibarq[-1] > 0.85:
+        return (chiq[-1], 1e-9)
+    else:
+        return (chiq[-1], 0.5) # Artificial creation of significance
 
