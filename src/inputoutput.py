@@ -170,8 +170,9 @@ class Reader(object):
     xarray open_dataarray standard provides .data as float 32. Here I want to possibly go to float16.
     Also I want to have the option to flatten the spatial dimensions into one,
     discarding nans, for instance ocean cells in ERA5-Land datasets
+    Then there is the option of reading only a sub-set region, but this excludes the flattening
     """
-    def __init__(self, datapath: Path, ncvarname: str = None, groupname: str = None, blocksize: int = 1000):
+    def __init__(self, datapath: Path, ncvarname: str = None, groupname: str = None, blocksize: int = 1000, region: Region = None):
         """
         Possibility to supply a hierarchical group for inside the netCDF4 file. 
         ncvarname is not a neccesity if it is a dataarray and not a dataset, it is discovered through xarray otherwise
@@ -180,6 +181,7 @@ class Reader(object):
         self.groupname = groupname
         self.ncvarname = ncvarname
         self.blocksize = blocksize
+        self.region = region
 
     def get_info(self, flatten: bool = False):
         """
@@ -187,21 +189,29 @@ class Reader(object):
         If spatial dims are flattened, then coordinates and size change.
         """
         temp = xr.open_dataarray(self.datapath, group = self.groupname)
-        for attrname in ['dims','attrs','size','coords','encoding', 'name']:
+        if not self.region is None:
+            latsubset = temp.latitude.sel(latitude = slice(self.region[3],self.region[1])) # Done with xarray's sel method to get the buildin tolerance measures.
+            lonsubset = temp.longitude.sel(longitude = slice(self.region[2],self.region[4]))
+            self.latidx = np.nonzero(np.logical_and(temp.latitude.values >= latsubset.values.min(), temp.latitude.values <= latsubset.values.max()))[0]
+            self.lonidx = np.nonzero(np.logical_and(temp.longitude.values >= lonsubset.values.min(), temp.longitude.values <= lonsubset.values.max()))[0]
+            temp = temp.isel(latitude = self.latidx, longitude = self.lonidx)
+        for attrname in ['dims','attrs','size','coords','encoding','name','shape']:
             setattr(self, attrname, getattr(temp, attrname))
-        if flatten and (len(self.dims) > 2):
+        if (flatten and (len(self.dims) > 2)):
+            assert self.region is None, 'region subset and flattening cannot be combined'
             block = temp[:self.blocksize,...].stack({'stacked':temp.dims[1:]}).dropna(dim = 'stacked', how = 'all')
             self.dims = block.dims
             bds = block.coords.to_dataset() # Gets the stacked coordinates in there, but zeroth timeaxis is incomplete due to the blocksize, therefore we take time from former
             self.coords = bds.assign_coords(**{self.dims[0]:temp.coords[self.dims[0]]}).coords
             self.size = len(self.coords[self.dims[0]]) * len(self.coords[self.dims[1]])
+            self.shape = self.shape[0:1] + (len(self.coords[self.dims[1]]),)
 
         if self.ncvarname is None:
             self.ncvarname = self.name
         else:
             self.name = self.ncvarname
 
-        logging.debug(f'Reader retrieved info from netcdf at {self.datapath}, flatten: {flatten}')
+        logging.debug(f'Reader retrieved info from netcdf at {self.datapath}, flatten: {flatten}, region: {self.region}')
         
     def read_one_day(self, index: int) -> tuple:
         """
@@ -240,17 +250,17 @@ class Reader(object):
                 presentset = presentset[self.groupname] # Move one level down
 
             presentset[self.ncvarname].set_auto_maskandscale(True) # Default but nice to have explicit that masked arrays are returned (at least, when missing values are present, see also comment below)
-            if flatten and (len(presentset[self.ncvarname].shape) > 2):
+            if not self.region is None:
+                non_nans_ind = tuple(slice(getattr(self,dim[:3] + 'idx').min(), getattr(self,dim[:3] + 'idx').max() + 1) for dim in self.dims[1:]) # for loop is to get the order right of the slices
+            elif flatten and (len(presentset[self.ncvarname].shape) > 2):
                 testblock = presentset[self.ncvarname][:self.blocksize,...] # Not sure that always masked arrays are returned (see comment below)
                 try:
                     non_nans_ind = np.where(~testblock.mask.all(axis = 0))# Tuple with arrays of indices for the to-be-flattened spatial dimensions
                 except AttributeError:
                     non_nans_ind = np.where(~np.isnan(testblock).all(axis = 0))
                 assert len(self.coords['stacked']) == len(non_nans_ind[0]) # Make sure that the amount of retained coordinates in the same as the amount of retained cells
-                self.shape = presentset[self.ncvarname].shape[:1] + (len(self.coords['stacked']),)
             else:
                 non_nans_ind = (slice(None),) * len(self.dims[1:]) # (slice(None),slice(None)) for two spatial dims
-                self.shape = presentset[self.ncvarname].shape
             
             # Prepare the array to be returned (possibly in already flattened shape)
             if into_shared:
