@@ -146,7 +146,14 @@ def kendall_choice(responseseries: xr.DataArray, precursorseries: xr.DataArray) 
     corr, p_val = weightedtau(x = precursorseries, y = responseseries, rank=rankdirection(x = precursorseries, y = responseseries))
     return(corr, 1e-9)
 
-def chi(responseseries: xr.DataArray, precursorseries: xr.DataArray, nq: int = 100, qlim: tuple = None, alpha: float = 0.05, trunc: bool = True):
+def kendall_predictand(responseseries: xr.DataArray, precursorseries: xr.DataArray) -> tuple:
+    """
+    Weights are determined by the responseseries (done by rank is True, meaning that weighting is determined by x)
+    """
+    corr, p_val = weightedtau(x = responseseries, y = precursorseries, rank = True)
+    return(corr, 1e-9)
+
+def chi(responseseries: xr.DataArray, precursorseries: xr.DataArray, nq: int = 100, qlim: tuple = None, alpha: float = 0.05, trunc: bool = True, full = False):
     """
     modified from https://github.com/cran/texmex/blob/master/R/chi.R
     Conversion to ECDF space. Computation of chi over a range of quantiles
@@ -186,9 +193,12 @@ def chi(responseseries: xr.DataArray, precursorseries: xr.DataArray, nq: int = 1
     #chiqvar = ((1/np.log(qs)**2)/qs * (1-qs))/n
     #chibarqvar = (((4 * np.log(1-qs)**2)/(np.log(chibarq)**4 * chibarq**2)) * chibarq * (1-chibarq))/n
 
-    # We basically want to get the dependence strengt for those pairs that are asymptotically dependent. 
-    if chibarq[-1] > 0.85:
-        return (chiq[-1], 1e-9)
+    if full:
+        return (chiq, chibarq)
     else:
-        return (chiq[-1], 0.5) # Artificial creation of significance
+        # We basically want to get the dependence strengt for those pairs that are asymptotically dependent. 
+        if chibarq[-1] > 0.6:
+            return (chiq[-1], 1e-9)
+        else:
+            return (np.nan,np.nan) # Artificial creation of significance
 
