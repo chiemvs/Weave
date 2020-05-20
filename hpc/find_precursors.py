@@ -23,9 +23,9 @@ sys.path.append(PACKAGEDIR)
 from Weave.src.processing import TimeAggregator
 from Weave.src.association import Associator
 from Weave.src.inputoutput import Writer
-from Weave.src.utils import agg_time, kendall_choice
+from Weave.src.utils import agg_time, kendall_predictand #kendall_choice, chi
 
-logging.basicConfig(filename= TMPDIR / 'roll_kendallweight.log', filemode='w', level=logging.DEBUG, format='%(process)d-%(relativeCreated)d-%(message)s')
+logging.basicConfig(filename= TMPDIR / 'roll_kendall_predictand.log', filemode='w', level=logging.DEBUG, format='%(process)d-%(relativeCreated)d-%(message)s')
 #logging.basicConfig(filename= TMPDIR / 'testprecursor_spearman.log', filemode='w', level=logging.DEBUG, format='%(process)d-%(relativeCreated)d-%(message)s')
 # Open a response timeseries. And extract a certain cluster with a cluster template
 response = xr.open_dataarray(ANOMDIR / 't2m_europe.anom.nc')
@@ -43,6 +43,7 @@ files.remove('swvl1_europe.anom.nc') # We only want to keep the merged one: swvl
 files.remove('swvl2_europe.anom.nc')
 files.remove('swvl3_europe.anom.nc')
 to_reduce = ['snowc','siconc'] # Variables that are reduced and stacked etc, such that they are not too large for parallel association
+#files = ['sst_nhplus.anom.nc']
 
 timeaggs = [1, 3, 5, 7, 9, 11, 15] # Block/rolling aggregations.
 # Open a precursor array
@@ -63,7 +64,7 @@ for timeagg in timeaggs:
             ta = TimeAggregator(datapath = ANOMDIR / inputfile, share_input = True, reduce_input = (varname in to_reduce))
             mean = ta.compute(nprocs = NPROC, ndayagg = timeagg, method = 'mean', firstday = pd.Timestamp(responseagg.time[0].values), rolling = True)
             del ta
-            ac = Associator(responseseries = summersubset, data = mean, laglist = laglist, association = kendall_choice)
+            ac = Associator(responseseries = summersubset, data = mean, laglist = laglist, association = kendall_predictand)
             del mean
             corr = ac.compute(NPROC, alpha = 0.05)
             if varname in to_reduce:

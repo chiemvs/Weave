@@ -27,7 +27,7 @@ if __name__ == '__main__':
     # ERA5 variables present in the data directory
     files = [ f.parts[-1] for f in OBSDIR.glob('*.nc') if f.is_file()]
     
-    for inputfile in ['swvl13_europe.nc']:
+    for inputfile in ['t850_nhblock.nc']:
         name = inputfile.split('.')[0]
         varname = name.split('_')[0]
         # Discover the group
