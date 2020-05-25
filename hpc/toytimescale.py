@@ -23,6 +23,7 @@ sys.path.append(PACKAGEDIR)
 from Weave.src.processing import TimeAggregator
 from Weave.src.inputoutput import Writer, Reader
 from Weave.src.utils import agg_time, get_europe, get_natlantic
+from Weave.src.dimreduction import spatcov 
 
 logging.basicConfig(filename= TMPDIR / 'toy.log', filemode='w', level=logging.DEBUG, format='%(process)d-%(relativeCreated)d-%(message)s')
 # Open a response timeseries. And extract a certain cluster with a cluster template
@@ -38,7 +39,7 @@ combinations = {'sst_nhplus.anom.nc':get_natlantic()} # 'z300_nhmin.anom.nc':get
 
 # Only rolling aggregation is possible for intercomparing timescales, as those are equally (daily) stamped
 #timeaggs = [1, 3, 5, 7, 9, 11, 15] # Block/rolling aggregations.
-timeaggs = [1]
+timeaggs = [3]
 for timeagg in timeaggs:
     laglist = [1, 3, 5, 7, 9, 11, 15, 20, 25, 30, 35, 40, 45] #list(timeagg * np.arange(1,11))
     # Aggregate the response, subset and detrend
@@ -52,11 +53,13 @@ for timeagg in timeaggs:
         varname = name.split('_')[0]
 #        outpath = OUTDIR / '.'.join([name,str(timeagg),'comp','nc'])
         ta = TimeAggregator(datapath = ANOMDIR / inputfile, share_input = True, reduce_input = False, region = region)
-        mean = ta.compute(nprocs = NPROC, ndayagg = timeagg, method = 'mean', firstday = pd.Timestamp(responseagg.time[0].values), rolling = True)
+        mean = ta.compute(nprocs = NPROC, ndayagg = timeagg, method = 'mean', firstday = None, rolling = True) #pd.Timestamp(responseagg.time[0].values), rolling = True)
         # After aggregation we are going to get the correlation pattern
         patternpath = PATTERNDIR / '.'.join([name,str(timeagg),'corr','nc'])
         r = Reader(patternpath, region = region)
         corr = r.read(into_shared = False)
+        test = spatcov(corr, mean.values)
+        test = xr.DataArray(test, dims = [r.dims[0], mean.dims[0]], coords = {r.dims[0]:r.coords[r.dims[0]], mean.dims[0]:mean.coords[mean.dims[0]]})
         # Start with the spatial covariance. Should be coded in the src/dimreduction. vectorized over lags? or by loop? Perhaps not decode the lag coordinates.
 
         # Collect the results in a dataframe. Outside the timeaggregation loop the ridge regression should be done. (One to all, or one per lag but with all timeaggs, as Kiri said) 
