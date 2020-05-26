@@ -23,9 +23,9 @@ sys.path.append(PACKAGEDIR)
 from Weave.src.processing import TimeAggregator
 from Weave.src.association import Associator
 from Weave.src.inputoutput import Writer
-from Weave.src.utils import agg_time, kendall_predictand #kendall_choice, chi
+from Weave.src.utils import agg_time #kendall_predictand #kendall_choice, chi
 
-logging.basicConfig(filename= TMPDIR / 'roll_kendall_predictand.log', filemode='w', level=logging.DEBUG, format='%(process)d-%(relativeCreated)d-%(message)s')
+logging.basicConfig(filename= TMPDIR / 'roll_spearman.log', filemode='w', level=logging.DEBUG, format='%(process)d-%(relativeCreated)d-%(message)s')
 #logging.basicConfig(filename= TMPDIR / 'testprecursor_spearman.log', filemode='w', level=logging.DEBUG, format='%(process)d-%(relativeCreated)d-%(message)s')
 # Open a response timeseries. And extract a certain cluster with a cluster template
 response = xr.open_dataarray(ANOMDIR / 't2m_europe.anom.nc')
@@ -49,7 +49,7 @@ timeaggs = [1, 3, 5, 7, 9, 11, 15] # Block/rolling aggregations.
 # Open a precursor array
 for timeagg in timeaggs:
     # Determine the lags as a multiple of the timeagg
-    laglist = [1, 3, 5, 7, 9, 11, 15, 20, 25, 30, 35, 40, 45] #list(timeagg * np.arange(1,11))
+    laglist = [-1, -3, -5, -7, -9, -11, -15, -20, -25, -30, -35, -40, -45] #list(timeagg * np.arange(1,11))
     #laglist = list(timeagg * np.arange(1,11))
     # Aggregate the response, subset and detrend
     responseagg = agg_time(array = reduced, ndayagg = timeagg, method = 'mean', rolling = True, firstday = pd.Timestamp('1981-01-01'))
@@ -64,7 +64,7 @@ for timeagg in timeaggs:
             ta = TimeAggregator(datapath = ANOMDIR / inputfile, share_input = True, reduce_input = (varname in to_reduce))
             mean = ta.compute(nprocs = NPROC, ndayagg = timeagg, method = 'mean', firstday = pd.Timestamp(responseagg.time[0].values), rolling = True)
             del ta
-            ac = Associator(responseseries = summersubset, data = mean, laglist = laglist, association = kendall_predictand)
+            ac = Associator(responseseries = summersubset, data = mean, laglist = laglist, association = spearmanr)
             del mean
             corr = ac.compute(NPROC, alpha = 0.05)
             if varname in to_reduce:

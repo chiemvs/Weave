@@ -37,7 +37,7 @@ def init_worker(inarray, dtype, shape, intimeaxis, responseseries, outarray, out
 def lag_subset_detrend_associate(spatial_index: tuple):
     """
     Worker function. Initialized with acess to an array (first axis is time, others are the spatial_index) , passed at inheritance
-    Also needs access to the original xr time axis, the xr response series, the lagrange (in days)
+    Also needs access to the original xr time axis, the xr response series, the lagrange (in days, and probably negative, as then data is treated as preceding the response)
     The response series is used both for subsetting with its time axis
     and for its values to compute association
     """
@@ -71,7 +71,7 @@ class Associator(Computer):
         Is fed with an already loaded data array, this namely is an intermediate timeaggregated array
         Always shares the input array, such that it can be deleted after initialization
         responseseries should already be a 1D detrended subset
-        laglist is how far to shift the data in number of days
+        laglist is how far to shift the data in number of days. A lag of -10 means that data values of 1979-01-01 are associated to the response values at 1979-01-11
         Choice to supply the function that determines association between two timeseries
         Should return (corr_float, p_value_float)
         """
