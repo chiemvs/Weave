@@ -37,17 +37,18 @@ del response
 
 # Define variable / region combinations for the dummy problem
 combinations = {'sst_nhplus.anom.nc':get_natlantic(), 'z300_nhmin.anom.nc':get_europe()}
+#combinations = {'sst_nhplus.anom.nc':get_natlantic()}
 # Define the time scale of the response (to be regressed to)
 responsetimeagg = 3
 responseagg = agg_time(array = reduced, ndayagg = responsetimeagg, method = 'mean', rolling = True, firstday = pd.Timestamp('1981-01-01'))
 summersubset = responseagg[responseagg.time.dt.season == 'JJA']
 #summersubset.values = detrend(summersubset.values) # Detrend here?
-summersubset.to_netcdf(OUTDIR / '.'.join(['response',str(responsetimeagg),'nc'])) # Quick and dirty save
+#summersubset.to_netcdf(OUTDIR / '.'.join(['response',str(responsetimeagg),'nc'])) # Quick and dirty save
 
 # Only rolling aggregation is possible for intercomparing timescales, as those are equally (daily) stamped
 timeaggs = [1, 3, 5, 7, 9, 11, 15]
-laglist = [1, 3, 5, 7, 9, 11, 15, 20, 25, 30, 35, 40, 45] # Eventually will be negative values
-#timeaggs = [3,5]
+laglist = [-1, -3, -5, -7, -9, -11, -15, -20, -25, -30, -35, -40, -45] # Eventually will be negative values
+#timeaggs = [3]
 # first level loop is variable / block combinations
 for inputfile, region in combinations.items():
     # Investigate the precursors

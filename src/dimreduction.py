@@ -27,7 +27,7 @@ def spatcov_multilag(pattern: xr.DataArray, precursor: xr.DataArray, laglist: li
         input: onepatterndiff 1D (nobs,), precursordiff 2D (ntime,nobs)
         output: 1D (ntime,)
         """
-        return(np.nansum(precursordiff * onepatterndiff, axis = -1)/(len(onepatterndiff) - 1))
+        return(np.nansum(precursordiff * onepatterndiff, axis = -1)/(len(onepatterndiff) - np.isnan(onepatterndiff).sum()))
 
     allseries = np.apply_along_axis(onelag_cov, axis = 1, arr = patterndiff, precursordiff = precursordiff)
     logging.debug(f'computed unlagged spatial covariances with the patterns of lags: {laglist}')
@@ -36,6 +36,6 @@ def spatcov_multilag(pattern: xr.DataArray, precursor: xr.DataArray, laglist: li
     for lag in laglist: # Units is days
         oneserie = allseries.sel({pattern.dims[0]:lag}).copy()
         oneserie['time'] = oneserie['time'] - pd.Timedelta(str(lag) + 'D') # Ascribe each value to another timestamp (e.g. lag of -10 means precursor value of originally 1979-01-01 is assigned to 1979-01-11
-        allseries.loc[{pattern.dims[0]:1}] = oneserie.reindex_like(allseries) # Write the lagged stamped values
+        allseries.loc[{pattern.dims[0]:lag}] = oneserie.reindex_like(allseries) # Write the lagged stamped values
         logging.debug(f'finished lagging ntimes: {len(oneserie)} with lag: {lag}')
     return(allseries)

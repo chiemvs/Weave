@@ -45,7 +45,8 @@ files.remove('swvl3_europe.anom.nc')
 to_reduce = ['snowc','siconc'] # Variables that are reduced and stacked etc, such that they are not too large for parallel association
 #files = ['sst_nhplus.anom.nc']
 
-timeaggs = [1, 3, 5, 7, 9, 11, 15] # Block/rolling aggregations.
+#timeaggs = [1, 3, 5, 7, 9, 11, 15] # Block/rolling aggregations.
+timeaggs = [11, 15] # Block/rolling aggregations.
 # Open a precursor array
 for timeagg in timeaggs:
     # Determine the lags as a multiple of the timeagg
