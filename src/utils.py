@@ -11,7 +11,7 @@ import pandas as pd
 import ctypes as ct
 from collections import namedtuple
 from typing import Union, Callable, Tuple
-from scipy.stats import rankdata, pearsonr, weightedtau, t
+from scipy.stats import rankdata, spearmanr, pearsonr, weightedtau, t
 
 Region = namedtuple("Region", ["name", "latmax","lonmin", "latmin", "lonmax"])
 
@@ -144,21 +144,34 @@ def rankdirection(x,y):
     else:
         return ranks.max() - ranks
 
-def kendall_choice(responseseries: xr.DataArray, precursorseries: xr.DataArray) -> tuple:
+def kendall_choice(data: np.ndarray) -> tuple:
     """
-    Takes in two timeseries. computes weighted kendall tau. Weighting direction in terms of precursor ranks is chosen based on pearsons
-    Can be numpy arrays or xarray.
+    Takes in two timeseries in a 2D array (n_obs,[x,y]). computes weighted kendall tau. Weighting direction in terms of precursor ranks is chosen based on pearsons
     Significance is not implemented
     """
-    corr, p_val = weightedtau(x = precursorseries, y = responseseries, rank=rankdirection(x = precursorseries, y = responseseries))
-    return(corr, 1e-9)
+    corr, _ = weightedtau(x = data[:,0], y = data[:,1], rank=rankdirection(x = data[:,0], y = data[:,1]))
+    return corr
 
-def kendall_predictand(responseseries: xr.DataArray, precursorseries: xr.DataArray) -> tuple:
+def kendall_predictand(data: np.ndarray) -> tuple:
     """
-    Weights are determined by the responseseries (done by rank is True, meaning that weighting is determined by x)
+    Takes in two timeseries in a 2D array (n_obs,[x,y]). computes weighted kendall tau.
+    Weights are determined by the y (done by rank is True, meaning that weighting is determined by x)
+    Significance is not implemented but might be obtained by bootstrapping
     """
-    corr, p_val = weightedtau(x = responseseries, y = precursorseries, rank = True)
-    return(corr, 1e-9)
+    corr, _ = weightedtau(x = data[:,1], y = data[:,0], rank = True)
+    return corr
+
+def pearsonr_wrap(data: np.ndarray) -> tuple:
+    """
+    wraps scipy pearsonr by decomposing a 2D dataarray (n_obs,[x,y]) into x and y
+    """
+    return pearsonr(x = data[:,0], y = data[:,1]) 
+
+def spearmanr_wrap(data: np.ndarray) -> tuple:
+    """
+    wraps scipy pearsonr by decomposing a 2D dataarray (n_obs,[x,y]) into x and y
+    """
+    return spearmanr(x = data[:,0], y = data[:,1]) 
 
 def chi(responseseries: xr.DataArray, precursorseries: xr.DataArray, nq: int = 100, qlim: tuple = None, alpha: float = 0.05, trunc: bool = True, full = False):
     """
@@ -260,5 +273,3 @@ def add_pvalue(func: Callable) -> Callable:
         
     return wrapper
 
-testfunc = lambda data: pearsonr(x = data[:,0], y = data[:,1])[0]
-independent_data = np.random.normal(0,1,(100,2))
