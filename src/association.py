@@ -67,7 +67,7 @@ def lag_subset_detrend_associate(spatial_index: tuple):
 
 class Associator(Computer):
 
-    def __init__(self, responseseries: xr.DataArray, data: xr.DataArray, laglist: list, association: Callable):
+    def __init__(self, responseseries: xr.DataArray, data: xr.DataArray, laglist: list, association: Callable) -> None:
         """
         Is fed with an already loaded data array, this namely is an intermediate timeaggregated array
         Always shares the input array, such that it can be deleted after initialization

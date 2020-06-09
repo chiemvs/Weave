@@ -144,7 +144,7 @@ def rankdirection(x,y):
     else:
         return ranks.max() - ranks
 
-def kendall_choice(data: np.ndarray) -> tuple:
+def kendall_choice(data: np.ndarray) -> float:
     """
     Takes in two timeseries in a 2D array (n_obs,[x,y]). computes weighted kendall tau. Weighting direction in terms of precursor ranks is chosen based on pearsons
     Significance is not implemented
@@ -152,13 +152,14 @@ def kendall_choice(data: np.ndarray) -> tuple:
     corr, _ = weightedtau(x = data[:,0], y = data[:,1], rank=rankdirection(x = data[:,0], y = data[:,1]))
     return corr
 
-def kendall_predictand(data: np.ndarray) -> tuple:
+def kendall_predictand(data: np.ndarray) -> float:
     """
     Takes in two timeseries in a 2D array (n_obs,[x,y]). computes weighted kendall tau.
-    Weights are determined by the y (done by rank is True, meaning that weighting is determined by x)
+    Weights are determined by the y (done by rank is None, meaning that weighting is determined by x)
+    (rank = True, would compute twice, once with x and second with y)
     Significance is not implemented but might be obtained by bootstrapping
     """
-    corr, _ = weightedtau(x = data[:,1], y = data[:,0], rank = True)
+    corr, _ = weightedtau(x = data[:,1], y = data[:,0], rank = None)
     return corr
 
 def pearsonr_wrap(data: np.ndarray) -> tuple:
@@ -171,9 +172,9 @@ def spearmanr_wrap(data: np.ndarray) -> tuple:
     """
     wraps scipy pearsonr by decomposing a 2D dataarray (n_obs,[x,y]) into x and y
     """
-    return spearmanr(x = data[:,0], y = data[:,1]) 
+    return spearmanr(a = data[:,0], b = data[:,1]) 
 
-def chi(responseseries: xr.DataArray, precursorseries: xr.DataArray, nq: int = 100, qlim: tuple = None, alpha: float = 0.05, trunc: bool = True, full = False):
+def chi(responseseries: xr.DataArray, precursorseries: xr.DataArray, nq: int = 100, qlim: tuple = None, alpha: float = 0.05, trunc: bool = True, full = False) -> tuple:
     """
     modified from https://github.com/cran/texmex/blob/master/R/chi.R
     Conversion to ECDF space. Computation of chi over a range of quantiles

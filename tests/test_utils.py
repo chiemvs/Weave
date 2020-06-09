@@ -1,8 +1,10 @@
 import numpy as np
+import xarray as xr
+import pandas as pd
 import pytest
 from scipy.stats import pearsonr
 
-from src.utils import nanquantile, bootstrap, add_pvalue
+from src.utils import nanquantile, bootstrap, add_pvalue, kendall_predictand, spearmanr_wrap, agg_time
 
 @pytest.fixture()
 def supply_testfunc():
@@ -51,5 +53,32 @@ def test_bootstrap_p_values():
     resample_stats = custom_corr(independent_data) # Returns (corr,p-value)
     param_stats = pearsonr(x = independent_data[:,0], y = independent_data[:,1])
     assert np.allclose(resample_stats[0], param_stats[0], atol = 0.001),"Two approaches should give similarly insignificant correlation strength with suffiecient bootstrap samples of independent normal data"
-    assert np.allclose(resample_stats[1], param_stats[1], atol = 0.05),"Two approaches should give similarl p-values with sufficient bootstrap samples of independent normal data"
-    
+    assert np.allclose(resample_stats[1], param_stats[1], atol = 0.05),"Two approaches should give similarl p-values with sufficient bootstrap samples of independent normal data"  
+
+def test_agg_time():
+    """
+    Tests if the correct number of days are the result
+    """
+    serie = xr.DataArray(np.arange(11), dims = ('time',), coords = {'time':pd.date_range('2000-01-01', '2000-01-11')})
+    blocks = agg_time(serie, ndayagg = 3, rolling = False)
+    assert len(blocks) == 11//3, "block aggregation with size 3 should result in the exact amount of full blocks that fit within the timeseries"
+    rolling = agg_time(serie, ndayagg = 3, rolling = True)
+    assert len(rolling) == 11 - 2, "rolling aggregation with window size 3 should result in two less left-stamped observation"
+    blocks_start = agg_time(serie, ndayagg = 3, rolling = False, firstday = pd.Timestamp('2000-01-04'))
+    assert len(blocks_start) == (11 - 3) // 3, "block aggregation with size 3 should result in the exact amount of full blocks that fit within the timeseries after the given first day"
+
+# No testing, only profiling, either with timeit or cProfile. 
+dummydat = np.random.random((1000,2))
+@add_pvalue
+@bootstrap(n_draws = 1000, quantile = None)
+def corr(data):
+    return kendall_predictand(data)
+
+def speed_kendall():
+    return corr(dummydat)
+
+def speed_spearman():
+    return spearmanr_wrap(dummydat)
+
+if __name__ == "__main__":
+    speed_kendall()
