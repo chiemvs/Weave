@@ -74,9 +74,16 @@ dummydat = np.random.random((1000,2))
 def corr(data):
     return kendall_predictand(data)
 
+@add_pvalue
+@bootstrap(n_draws = 500, blocksize = 20, quantile = None)
+def corr_block(data):
+    return kendall_predictand(data)
+
 def speed_kendall():
     return corr(dummydat)
 
+def speed_kendall_block():
+    return corr_block(dummydat)
 def speed_spearman():
     return spearmanr_wrap(dummydat)
 

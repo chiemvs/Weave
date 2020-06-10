@@ -246,7 +246,7 @@ def bootstrap(n_draws: int, blocksize: int = None, quantile: Union[int, list] = 
                 if blocksize is None: # Determine indices along the zeroth axis. np.random.choice(data,n_obs,replace = True) does not work with 2D data
                     indices = np.random.randint(low = 0, high = n_obs, size = n_obs)
                 else:
-                    indices = np.concatenate(np.random.choice(blocks, n_obs//blocksize, replace = True))
+                    indices = np.concatenate([blocks[i] for i in np.random.randint(low = 0, high = len(blocks), size = len(blocks))])
                 collection[i] = func(data[indices,...], *args[1:], **kwargs)
             if quantile is None:
                 return collection
