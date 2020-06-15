@@ -31,7 +31,7 @@ def init_worker(inarray, dtype, shape, intimeaxis, responseseries, outarray, out
     var_dict['outdtype'] = outdtype
     var_dict['outshape'] = outshape
     var_dict['laglist'] = laglist
-    var_dict['asofunc'] = asofunc # Association function like scipy.stats.spearmanr
+    var_dict['asofunc'] = asofunc # Association function defined in utils 
     logging.debug('this initializer has populated a global dictionary')
 
 def lag_subset_detrend_associate(spatial_index: tuple):
@@ -58,15 +58,16 @@ def lag_subset_detrend_associate(spatial_index: tuple):
         logging.debug(f'Worker starts lagging, detrending and correlating of cell {spatial_index} for lags {laglist}')
         for lag in laglist: # Units is days
             oriset['time'] = intimeaxis - pd.Timedelta(str(lag) + 'D') # Each point in time is assigned to a lagged date
-            subset = oriset.reindex_like(subsettimeaxis) # We only retain the points assigned to the dates of the response timeseries. Potentially this generates some nans. Namely when the response series extends further than the precursor (ERA5 vs ERA5-land)
-            subset = subset[~subset.isnull()] # Then we only retain non-nan. detrend and pearsonr cant handle them
-            subset.values = detrend(subset) # Only a single axis, replace values. We need the non-nan timeaxis to also get a potentially reduced subset of the response
+            combined = np.column_stack((oriset.reindex_like(subsettimeaxis), var_dict['responseseries'])) # We only retain the points assigned to the dates of the response timeseries. Potentially this generates some nans. Namely when the response series extends further than the precursor (ERA5 vs ERA5-land)
+            # Combined is an array (n_obs,2) with zeroth column the precursor (x) and first column the response (y) 
+            combined = combined[~np.isnan(combined[:,0]),:] # Then we only retain non-nan. detrend cant handle them
+            combined[:,0] = detrend(combined[:,0]) # Response was already detrended
             out_index = (laglist.index(lag), slice(None)) + spatial_index # Remember the shape of (len(lagrange),2) + spatdims 
-            outarray[out_index] = var_dict['asofunc'](var_dict['responseseries'].reindex_like(subset), subset) # Asofunc should return (corr,pvalue)
+            outarray[out_index] = var_dict['asofunc'](combined) # Asofunc should accept 2D data array and return (corr,pvalue)
 
 class Associator(Computer):
 
-    def __init__(self, responseseries: xr.DataArray, data: xr.DataArray, laglist: list, association: Callable):
+    def __init__(self, responseseries: xr.DataArray, data: xr.DataArray, laglist: list, association: Callable) -> None:
         """
         Is fed with an already loaded data array, this namely is an intermediate timeaggregated array
         Always shares the input array, such that it can be deleted after initialization

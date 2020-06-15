@@ -10,7 +10,8 @@ import xarray as xr
 import pandas as pd
 import ctypes as ct
 from collections import namedtuple
-from scipy.stats import rankdata, pearsonr, weightedtau
+from typing import Union, Callable, Tuple
+from scipy.stats import rankdata, spearmanr, pearsonr, weightedtau, t
 
 Region = namedtuple("Region", ["name", "latmax","lonmin", "latmin", "lonmax"])
 
@@ -53,7 +54,7 @@ def get_corresponding_ctype(npdtype: type) -> type:
     nptypes.update({np.dtype(np.float16):ct.c_short})
     return nptypes[np.dtype(npdtype)]
 
-def nanquantile(array, q):
+def nanquantile(array: np.ndarray, q: float) -> np.ndarray:
     """
     Get quantile along the first axis of the array. Faster than numpy, because it has only a quantile function ignoring nan's along one dimension.
     Quality checked against numpy native method.
@@ -84,7 +85,7 @@ def nanquantile(array, q):
 
     return(quant_arr)
 
-def _zvalue_from_index(arr, ind):
+def _zvalue_from_index(arr: np.ndarray, ind: np.ndarray) -> np.ndarray:
     """private helper function to work around the limitation of np.choose() by employing np.take()
     arr has to be a 3D array or 2D (inferred by ndim)
     ind has to be an array without the first arr dimension containing values for z-indicies to take from arr
@@ -143,23 +144,37 @@ def rankdirection(x,y):
     else:
         return ranks.max() - ranks
 
-def kendall_choice(responseseries: xr.DataArray, precursorseries: xr.DataArray) -> tuple:
+def kendall_choice(data: np.ndarray) -> float:
     """
-    Takes in two timeseries. computes weighted kendall tau. Weighting direction in terms of precursor ranks is chosen based on pearsons
-    Can be numpy arrays or xarray.
+    Takes in two timeseries in a 2D array (n_obs,[x,y]). computes weighted kendall tau. Weighting direction in terms of precursor ranks is chosen based on pearsons
     Significance is not implemented
     """
-    corr, p_val = weightedtau(x = precursorseries, y = responseseries, rank=rankdirection(x = precursorseries, y = responseseries))
-    return(corr, 1e-9)
+    corr, _ = weightedtau(x = data[:,0], y = data[:,1], rank=rankdirection(x = data[:,0], y = data[:,1]))
+    return corr
 
-def kendall_predictand(responseseries: xr.DataArray, precursorseries: xr.DataArray) -> tuple:
+def kendall_predictand(data: np.ndarray) -> float:
     """
-    Weights are determined by the responseseries (done by rank is True, meaning that weighting is determined by x)
+    Takes in two timeseries in a 2D array (n_obs,[x,y]). computes weighted kendall tau.
+    Weights are determined by the y (done by rank is None, meaning that weighting is determined by x)
+    (rank = True, would compute twice, once with x and second with y)
+    Significance is not implemented but might be obtained by bootstrapping
     """
-    corr, p_val = weightedtau(x = responseseries, y = precursorseries, rank = True)
-    return(corr, 1e-9)
+    corr, _ = weightedtau(x = data[:,1], y = data[:,0], rank = None)
+    return corr
 
-def chi(responseseries: xr.DataArray, precursorseries: xr.DataArray, nq: int = 100, qlim: tuple = None, alpha: float = 0.05, trunc: bool = True, full = False):
+def pearsonr_wrap(data: np.ndarray) -> tuple:
+    """
+    wraps scipy pearsonr by decomposing a 2D dataarray (n_obs,[x,y]) into x and y
+    """
+    return pearsonr(x = data[:,0], y = data[:,1]) 
+
+def spearmanr_wrap(data: np.ndarray) -> tuple:
+    """
+    wraps scipy pearsonr by decomposing a 2D dataarray (n_obs,[x,y]) into x and y
+    """
+    return spearmanr(a = data[:,0], b = data[:,1]) 
+
+def chi(responseseries: xr.DataArray, precursorseries: xr.DataArray, nq: int = 100, qlim: tuple = None, alpha: float = 0.05, trunc: bool = True, full = False) -> tuple:
     """
     modified from https://github.com/cran/texmex/blob/master/R/chi.R
     Conversion to ECDF space. Computation of chi over a range of quantiles
@@ -207,4 +222,55 @@ def chi(responseseries: xr.DataArray, precursorseries: xr.DataArray, nq: int = 1
             return (chiq[-1], 1e-9)
         else:
             return (np.nan,np.nan) # Artificial creation of significance
+
+def bootstrap(n_draws: int, blocksize: int = None, quantile: Union[int, list] = None) -> Callable:
+    """
+    Bootstrapping a function that takes 1D/2D data array as a first argument 
+    By resampling this array along the zeroth axis.
+    Resampling is done with non-overlapping blocks when a blocksize is given
+    the function should return only one value. Collects n_draws return values in an array
+    Either returns those, when no quantiles are given
+    Or returns the requested quantiles of the collection 
+    """
+    def actual_decorator(func: Callable) -> Callable:
+        def bootstrapper(*args, **kwargs) -> np.ndarray:
+            collection = np.full((n_draws,), np.nan)
+            try: # Fish the data from any of the arguments, either called data or the first argument
+                data = kwargs.pop('data')
+            except KeyError:
+                data = args[0]
+            n_obs = len(data)
+            if blocksize is not None: # Do some precomputation
+                blocks = np.array_split(np.arange(n_obs), np.arange(blocksize,n_obs,blocksize))
+            for i in range(n_draws):
+                if blocksize is None: # Determine indices along the zeroth axis. np.random.choice(data,n_obs,replace = True) does not work with 2D data
+                    indices = np.random.randint(low = 0, high = n_obs, size = n_obs)
+                else:
+                    indices = np.concatenate([blocks[i] for i in np.random.randint(low = 0, high = len(blocks), size = len(blocks))])
+                collection[i] = func(data[indices,...], *args[1:], **kwargs)
+            if quantile is None:
+                return collection
+            else:
+                return np.array(np.nanquantile(collection, quantile))
+        return bootstrapper
+    return actual_decorator
+
+def add_pvalue(func: Callable) -> Callable:
+    """
+    Converts an empirical distribrution (array) of a sample statistic
+    as returned by the function to its mean estimate
+    and a p-value for the probability that that value would be the result
+    of an assumed True Null Hypothesis. This Null hypothesis is that 
+    of a student t dist with similar variability (estimated by std_err) and true statistic of zero
+    p-value is the parametric estimate of the two tailed probability of producing abs(estimate)
+    (copying scipy)
+    """
+    def wrapper(*args, **kwargs) -> Tuple[float,float]:
+        sample_dist = func(*args, **kwargs)
+        estimate = sample_dist.mean()
+        std_err_estimate = sample_dist.std() 
+        n_samples = len(sample_dist)
+        return estimate, 2*t.sf(x = abs(estimate), df = n_samples - 2, loc = 0, scale = std_err_estimate)
+        
+    return wrapper
 

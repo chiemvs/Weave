@@ -5,9 +5,11 @@ ERA5-Land 0.1 degree resolution, hourly. 4 * volumetric soil water content, 1 * 
 ERA5-Land will have about a 9 times larger data volume than a single level of ERA5 in the same domain.
 Hourly is not needed so reworking to daily averages/sums. 
 """
-
+import sys
 import logging
 from pathlib import Path
+
+sys.path.append('..')
 from src.utils import get_europe, get_nhplus, get_nhmin, get_nhblock
 from src.downloaders import CDSDownloader, DataOrganizer, DataMerger
 
@@ -22,7 +24,7 @@ d = DataOrganizer(varname = 't850', region = get_nhblock(), operation = '12UTC')
 #d = DataOrganizer(varname = 'snowc', region = get_nhmin(), operation = '24UTC')
 #d = DataOrganizer(varname = 'swvl4', region = get_europe(), operation = 'mean')
 #d = DataOrganizer(varname = 'tcc', region = get_europe(), operation = 'mean')
-d.main(start = '1979-01-01', end = '2019-12-31')
+#d.main(start = '1979-01-01', end = '2019-12-31')
 
 #paths = paths = [Path('/nobackup_1/users/straaten/ERA5/swvl1/swvl1_europe.nc'), Path('/nobackup_1/users/straaten/ERA5/swvl2/swvl2_europe.nc'), Path('/nobackup_1/users/straaten/ERA5/swvl3/swvl3_europe.nc')]
 #groups = ['mean','mean','mean']
