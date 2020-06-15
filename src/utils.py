@@ -162,6 +162,13 @@ def kendall_predictand(data: np.ndarray) -> float:
     corr, _ = weightedtau(x = data[:,1], y = data[:,0], rank = None)
     return corr
 
+def quick_kendall(data: np.ndarray) -> tuple:
+    """
+    no significance testing
+    """
+    corr, pval = weightedtau(x = data[:,1], y = data[:,0], rank = None)
+    return (corr, 1e-9)
+
 def pearsonr_wrap(data: np.ndarray) -> tuple:
     """
     wraps scipy pearsonr by decomposing a 2D dataarray (n_obs,[x,y]) into x and y
