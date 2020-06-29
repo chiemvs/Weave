@@ -75,29 +75,30 @@ class Writer(object):
                 presentset = presentset[self.groupname] # Move one level down
             if not self.ncvarname in presentset.variables:
                 for dim in dimensions:
-                    try: # Try to extract from a possible supplied example, time axis will be unlimited
-                        values = example.coords[dim].values
-                        if dim == 'time': # Inferring netcdf writeable coordinates from requires extra effort. xarray gives np.datetime64[ns]
-                            values = [pd.Timestamp(x).to_pydatetime() for x in values.tolist()]
-                            values = nc.date2num(values, **std_dimension_formats[dim]['attrs'])
-                    except AttributeError: # Create all from scratch, in this case time axis will also be unlimited but not filled
-                        spacing = self.formats.loc['spacing']
-                        if dim == 'latitude':
-                            values = np.arange(self.region[3], self.region[1] + spacing, spacing)
-                            values = np.round(values, decimals = 2)
-                        elif dim == 'longitude':
-                            values = np.arange(self.region[2], self.region[4] + spacing, spacing) 
-                            values = np.round(values, decimals = 2)
-                            values = values[~(values >= 180)] # If wrapping round the full globe (beyond 180) then don't count these cells. In CDS these cells should be given as -180 and above. So remove everything >= 180
-                        elif dim == 'doy':
-                            values = np.arange(1,std_dimension_formats[dim]['size'] + 1)
-                        else:
-                            values = None # In this case time dimension. Making sure that nothing will be filled
-                    presentset.createDimension(dimname = dim, size = std_dimension_formats[dim]['size'] if dim == 'time' else len(values))
-                    presentset.createVariable(varname = dim, dimensions = (dim,), **std_dimension_formats[dim]['encoding'])
-                    presentset[dim].setncatts(std_dimension_formats[dim]['attrs'])
-                    if values is not None:
-                        presentset[dim][:] = values
+                    if not dim in presentset.variables:
+                        try: # Try to extract from a possible supplied example, time axis will be unlimited
+                            values = example.coords[dim].values
+                            if dim == 'time': # Inferring netcdf writeable coordinates from requires extra effort. xarray gives np.datetime64[ns]
+                                values = [pd.Timestamp(x).to_pydatetime() for x in values.tolist()]
+                                values = nc.date2num(values, **std_dimension_formats[dim]['attrs'])
+                        except AttributeError: # Create all from scratch, in this case time axis will also be unlimited but not filled
+                            spacing = self.formats.loc['spacing']
+                            if dim == 'latitude':
+                                values = np.arange(self.region[3], self.region[1] + spacing, spacing)
+                                values = np.round(values, decimals = 2)
+                            elif dim == 'longitude':
+                                values = np.arange(self.region[2], self.region[4] + spacing, spacing) 
+                                values = np.round(values, decimals = 2)
+                                values = values[~(values >= 180)] # If wrapping round the full globe (beyond 180) then don't count these cells. In CDS these cells should be given as -180 and above. So remove everything >= 180
+                            elif dim == 'doy':
+                                values = np.arange(1,std_dimension_formats[dim]['size'] + 1)
+                            else:
+                                values = None # In this case time dimension. Making sure that nothing will be filled
+                        presentset.createDimension(dimname = dim, size = std_dimension_formats[dim]['size'] if dim == 'time' else len(values))
+                        presentset.createVariable(varname = dim, dimensions = (dim,), **std_dimension_formats[dim]['encoding'])
+                        presentset[dim].setncatts(std_dimension_formats[dim]['attrs'])
+                        if values is not None:
+                            presentset[dim][:] = values
                 # Creating the actual variable, can have a special name that is different from the base varname
                 presentset.createVariable(varname = self.ncvarname, dimensions = dimensions, **self.formats.loc[['datatype','fill_value']].to_dict())
                 if not self.formats.loc[['scale_factor']].isnull().bool():

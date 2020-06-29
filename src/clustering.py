@@ -23,6 +23,8 @@ from scipy.spatial.distance import jaccard, squareform
 from typing import Union, Callable, List
 from .utils import nanquantile, get_corresponding_ctype
 from sklearn.metrics import pairwise_distances
+from sklearn.cluster import DBSCAN
+from haversine import haversine_vector
 
 class Manipulator(object):
     """
@@ -117,6 +119,12 @@ class Clustering(object):
         self.groupname = groupname
         self.varpath = varpath
         self.storedir = storedir
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, type, value, traceback):
+        pass
     
     def __repr__(self) -> str:
         return f'Clustering(varname = {self.varname}, groupname = {self.groupname}, varpath = {self.varpath})'
@@ -283,21 +291,35 @@ class Clustering(object):
             requestname = 'nclusters' 
             logging.debug(f'clusters {nclusters} will be asked from {clusterclass} or standard scipy hierarchy.')
         except TypeError:
-            requestsize = len(dissimheights)
-            requestname = 'dissimheight'
-            logging.debug(f'levels {dissimheights} will be asked from standard scipy hierarchy. {clusterclass} should be None.')
-            assert (not dissimheights is None), "dissimheights cannot be None when nclusters also None"
+            try:
+                requestsize = len(dissimheights)
+                requestname = 'dissimheight'
+                logging.debug(f'levels {dissimheights} will be asked from standard scipy hierarchy. {clusterclass} should be None.')
+            except TypeError:
+                requestsize = 1
+                requestname = 'nclusters'
+                assert clusterclass == DBSCAN, 'You can only refrain from specifying nclusters and dissimheigts when using DBSCAN, which determines this by itself'
+                logging.debug(f'The amount of clusters will be determined by {clusterclass}.')
+
         returnarray = np.zeros((requestsize,self.manshape[-1]), dtype = np.int16)
         if not clusterclass is None:
             # The sklearn classes want a square distance matrix, and can only be called once per ncluster value
             if not self.distmat.ndim == 2:
                 self.distmat = squareform(self.distmat)
-            for ncluster in nclusters:
-                kwargs.update({'n_clusters':ncluster, 'affinity':'precomputed'})
+            if clusterclass == DBSCAN:
+                kwargs.update({'metric':'precomputed'})
                 cl = clusterclass(*args, **kwargs)
                 logging.debug(f'Initialized the supplied sklearn clusterclass as {cl}')
                 cl.fit(self.distmat) # weigths?
-                returnarray[nclusters.index(ncluster),:] = cl.labels_
+                nclusters = [ sum(np.unique(cl.labels_) != -1) ]
+                returnarray[:,:] = cl.labels_
+            else:
+                for ncluster in nclusters:
+                    kwargs.update({'n_clusters':ncluster, 'affinity':'precomputed'})
+                    cl = clusterclass(*args, **kwargs)
+                    logging.debug(f'Initialized the supplied sklearn clusterclass as {cl}')
+                    cl.fit(self.distmat) # weigths?
+                    returnarray[nclusters.index(ncluster),:] = cl.labels_
         else:
             # We use the standard scipy hierarchal clustering, wants a condensed distance matix. Luckily squareform can also do the inverse
             if not self.distmat.ndim == 1:
@@ -311,6 +333,7 @@ class Clustering(object):
 
         if hasattr(self, 'samplecoords'):
             returnarray = xr.DataArray(returnarray, dims = (requestname,self.samplecoords.name), coords = {requestname:nclusters if nclusters else dissimheights, self.samplecoords.name: self.samplecoords}, name = 'clustid')
+            returnarray = returnarray.where(cond = returnarray >= 0, drop = False) # Put nan where clustid is -1, which is the noise cluster of dbscan, changes the np.dtype
             returnarray.encoding.update({'dtype': 'int16', '_FillValue': -32767})
             if hasattr(self, 'stackdim'):
                 returnarray = returnarray.unstack(self.samplecoords.name).reindex_like(self.samplefield)
@@ -340,6 +363,29 @@ def jaccard_worker(inqueue: mp.Queue, readarray: mp.RawArray, readarrayshape: tu
             break
         else:
             DIST_np[distmat_indices] = np.apply_along_axis(jaccard, 0, readarray_np[:,compare_samples], **{'v':readarray_np[:,i]})
+
+def haversine_worker(inqueue: mp.Queue, readarray: mp.RawArray, readarrayshape: tuple, readarraydtype: type, writearray: mp.RawArray, writearraydtype: type) -> None:
+    """
+    Worker that takes messages from a queue to compute the jaccard distance between sample i and a set of other samples in the reading array
+    Reshapes the reading array once if it is a shared ctype, otherwise it is on disk or copied into the memory of each worker 
+    The computation reduces the reading array along the zero-th dimension
+    it writes the resulting distances to non-overlapping parts of the shared triangular array. 
+    """
+    DIST_np = np.frombuffer(writearray, dtype =  writearraydtype)
+    logging.info('this process has given itself access to a shared writing array')
+    if not isinstance(readarray, (np.ndarray, np.memmap)): # Make the thing numpy accesible in this process
+        readarray_np = np.frombuffer(readarray, dtype = readarraydtype).reshape(readarrayshape)
+        logging.info('this process has given itself access to a shared reading array')
+    else:
+        readarray_np = readarray
+    
+    while True:
+        i, compare_samples, distmat_indices = inqueue.get()
+        if i == 'STOP':
+            logging.info('this process is shutting down, after STOP')
+            break
+        else:
+            DIST_np[distmat_indices] = haversine_vector(array1 = readarray_np[:,i], array2 = readarray_np[:,compare_samples].T)
 
 def dummy_worker(inqueue: mp.Queue, readarray: mp.RawArray, readarrayshape: tuple, readarraydtype: type, writearray: mp.RawArray, writearraydtype: type) -> None:
     DIST_np = np.frombuffer(writearray, dtype =  writearraydtype)
@@ -392,22 +438,3 @@ def maxcorrcoef_worker(inqueue: mp.Queue, readarray: mp.RawArray, readarrayshape
             r = r_num/r_den # result (d,m)
             DIST_np[distmat_indices] = 1 - np.nanmax(r, axis = 0) # Maximum over d, 1 minus maxcor to adapt to a distance.
 
-    
-if __name__ == '__main__':
-    logging.basicConfig(filename='responsecluster.log', filemode='w', level=logging.DEBUG, format='%(process)d-%(levelname)s-%(message)s')
-    siconc = xr.open_dataarray('/nobackup_1/users/straaten/ERA5/siconc/siconc_nhmin.nc', group = 'mean')[0]
-    t2m = xr.open_dataarray('/nobackup_1/users/straaten/ERA5/t2m/t2m_europe.nc', group = 'mean')
-    mask = siconc.sel(latitude = t2m['latitude'], longitude = t2m['longitude']).isnull()
-    mask[mask['latitude'] < 60,:] = False
-    siconc.close()
-    t2m.close()
-    self = Clustering(varname = 't2m', groupname = 'mean', varpath = Path('/nobackup_1/users/straaten/ERA5/t2m/t2m_europe.nc'))
-    #self.reshape_and_drop_obs(season='JJA', mask=mask)
-    #self.prepare_for_distance_algorithm(where='memmap', manipulator=Lagshift, kwargs={'lags':list(range(-20,21))})
-    #self.prepare_for_distance_algorithm(where=None, manipulator=Exceedence, kwargs={'quantile':0.85})
-    #self.call_distance_algorithm(func = pairwise_distances, kwargs= {'metric':'jaccard'}, n_par_processes = 7)
-    #self.call_distance_algorithm(func = jaccard_worker, n_par_processes = 7)
-    #self.call_distance_algorithm(func = dummy_worker, n_par_processes = 7)
-    #from sklearn.cluster import AgglomerativeClustering
-    #ret = self.clustering(nclusters= [2,3,4], clusterclass= AgglomerativeClustering, kwargs = {'linkage':'average'})
-    #ret2 = self.clustering(nclusters = [2,3,4])
