@@ -52,6 +52,10 @@ class Writer(object):
         self.region = region
         self.formats = variable_formats.loc[varname]
 
+    def __repr__(self):
+        attrs = ['datapath','ncvarname','formats']
+        return '\n'.join([str(getattr(self,attr)) for attr in attrs if hasattr(self,attr)])
+
     def create_dataset(self, dimensions: tuple = None, example: xr.DataArray = None) -> None:
         """
         Can create a set by supplying the desired standard dimensions (in order of the array axis),
@@ -184,12 +188,19 @@ class Reader(object):
         self.blocksize = blocksize
         self.region = region
 
-    def get_info(self, flatten: bool = False):
+    def __repr__(self):
+        attrs = ['datapath','ncvarname','name','dims','shape','dtype','coords']
+        return '\n'.join([str(getattr(self,attr)) for attr in attrs if hasattr(self,attr)])
+
+    def get_info(self, flatten: bool = False, decode_lag: bool = None):
         """
         Get additional information by using xarray
         If spatial dims are flattened, then coordinates and size change.
         """
-        temp = xr.open_dataarray(self.datapath, group = self.groupname)
+        if not self.ncvarname is None:
+            temp = xr.open_dataset(self.datapath, group = self.groupname, decode_times = decode_lag)[self.ncvarname]
+        else:
+            temp = xr.open_dataarray(self.datapath, group = self.groupname, decode_times = decode_lag)
         if not self.region is None:
             latsubset = temp.latitude.sel(latitude = slice(self.region[3],self.region[1])) # Done with xarray's sel method to get the buildin tolerance measures.
             lonsubset = temp.longitude.sel(longitude = slice(self.region[2],self.region[4]))
@@ -234,7 +245,7 @@ class Reader(object):
                 logging.debug(f'Reader could not find index {index} along zeroth axis')
                 return (None, None)
 
-    def read(self, into_shared: bool = True, flatten: bool = False, dtype: type = np.float32):
+    def read(self, into_shared: bool = True, flatten: bool = False, dtype: type = np.float32, decode_lag: bool = None):
         """
         Only the data reading is taken over from xarray. Coords, dims and encoding not, these become class attributes
         Either reads into a numpy array, and returns that
@@ -243,7 +254,7 @@ class Reader(object):
         Only possible when 2+ dimensions
         """
         # Storing additional information. By using xarray
-        self.get_info(flatten = flatten)
+        self.get_info(flatten = flatten, decode_lag = decode_lag)
         self.dtype = dtype
         
         with nc.Dataset(self.datapath, mode='r') as presentset:
