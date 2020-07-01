@@ -245,7 +245,7 @@ class Reader(object):
                 logging.debug(f'Reader could not find index {index} along zeroth axis')
                 return (None, None)
 
-    def read(self, into_shared: bool = True, flatten: bool = False, dtype: type = np.float32, decode_lag: bool = None):
+    def read(self, into_shared: bool = True, flatten: bool = False, dtype: type = np.float32, decode_lag: bool = True):
         """
         Only the data reading is taken over from xarray. Coords, dims and encoding not, these become class attributes
         Either reads into a numpy array, and returns that
