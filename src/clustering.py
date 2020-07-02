@@ -124,7 +124,12 @@ class Clustering(object):
         return self
 
     def __exit__(self, type, value, traceback):
-        pass
+        """
+        Some cleanup of potentially huge attributes
+        """
+        for item in ['distmat','array']:
+            if hasattr(self, item):
+                delattr(self, item)
     
     def __repr__(self) -> str:
         return f'Clustering(varname = {self.varname}, groupname = {self.groupname}, varpath = {self.varpath})'
@@ -310,7 +315,7 @@ class Clustering(object):
                 kwargs.update({'metric':'precomputed'})
                 cl = clusterclass(*args, **kwargs)
                 logging.debug(f'Initialized the supplied sklearn clusterclass as {cl}')
-                cl.fit(self.distmat) # weigths?
+                cl.fit(self.distmat) # weigths? This can be huge on memory even though there was precomputation when a lot of cells are connected through each others eps regions
                 nclusters = [ sum(np.unique(cl.labels_) != -1) ]
                 returnarray[:,:] = cl.labels_
             else:

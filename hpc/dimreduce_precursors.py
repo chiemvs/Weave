@@ -61,9 +61,8 @@ else:
     logging.debug(f'previously existing file found at {response_output}, do nothing')
 
 # Only rolling aggregation is possible for intercomparing timescales, as those are equally (daily) stamped
-laglist = [-1, -3, -5, -7, -9, -11, -15, -20, -25, -30, -35, -40, -45] # Eventually will be negative values
-files = [ f for f in PATTERNDIR.glob('*corr.nc') if f.is_file()]
-files = [Path('/scistor/ivm/jsn295/tcc_europe.15.corr.test.nc')]
+files = [ f for f in PATTERNDIR.glob('*corr.alpha*.nc') if f.is_file()]
+#files = [Path('/scistor/ivm/jsn295/tcc_europe.15.corr.test.nc')]
 #to_reduce = ['snowc_nhmin','siconc_nhmin']
 # first level loop is variable / timeagg combinations over files
 # Each file has unique clustid shapes per lag, so the
