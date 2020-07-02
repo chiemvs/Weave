@@ -40,7 +40,7 @@ from Weave.src.inputoutput import Writer
 #returnarray.to_netcdf(OBSDIR / '../paper1/tg-DJF-clustered_3D.nc')
 
 # Quantile exceedence ERA5 part, with jaccard distance, Does not need the 
-logging.basicConfig(filename= TMPDIR / 'responsecluster.log', filemode='w', level=logging.DEBUG, format='%(process)d-%(levelname)s-%(message)s')
+logging.basicConfig(filename= TMPDIR / 'cluster_response.log', filemode='w', level=logging.DEBUG, format='%(process)d-%(levelname)s-%(message)s')
 from sklearn.metrics import pairwise_distances
 import xarray as xr
 siconc = xr.open_dataarray(OBSDIR / 'siconc_nhmin.nc', group = 'mean')[0]

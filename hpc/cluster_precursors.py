@@ -1,5 +1,5 @@
 """
-Call signature: python precursor_clust.py $TEMPDIR $PACKAGEDIR $NPROC $PATTERNDIR
+Call signature: python cluster_precursors.py $TEMPDIR $PACKAGEDIR $NPROC $PATTERNDIR
 Reading of a correlation field. DBSCAN clustering on spatial distance
 Will write clustids inside the files of the patterndir
 """
@@ -21,7 +21,7 @@ sys.path.append(PACKAGEDIR)
 from Weave.src.inputoutput import Writer, Reader
 from Weave.src.clustering import Clustering, haversine_worker
 
-logging.basicConfig(filename= TMPDIR / 'precursor_clust.log', filemode='w', level=logging.DEBUG, format='%(process)d-%(relativeCreated)d-%(message)s')
+logging.basicConfig(filename= TMPDIR / 'cluster_precursors.log', filemode='w', level=logging.DEBUG, format='%(process)d-%(relativeCreated)d-%(message)s')
 
 #corrfiles = [ f in PATTERNDIR.glob('*corr.nc') if f.is_file()]
 corrfiles = [PATTERNDIR / 'tcc_europe.15.corr.nc']

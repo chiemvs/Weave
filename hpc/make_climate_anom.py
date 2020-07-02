@@ -1,5 +1,5 @@
 """
-Call signature: python testclimate.py $TEMPDIR $PACKAGEDIR $NPROC $OBSDIR $OUTDIR
+Call signature: python make_climate_anom.py $TEMPDIR $PACKAGEDIR $NPROC $OBSDIR $OUTDIR
 """
 
 import sys
@@ -22,7 +22,7 @@ from Weave.src.processing import ClimateComputer, AnomComputer, TimeAggregator
 from Weave.src.inputoutput import Writer 
 
 if __name__ == '__main__':
-    logging.basicConfig(filename= TMPDIR / 'testclimate.log', filemode='w', level=logging.DEBUG, format='%(process)d-%(relativeCreated)d-%(message)s')
+    logging.basicConfig(filename= TMPDIR / 'make_climate_anom.log', filemode='w', level=logging.DEBUG, format='%(process)d-%(relativeCreated)d-%(message)s')
 
     # ERA5 variables present in the data directory
     files = [ f.parts[-1] for f in OBSDIR.glob('*.nc') if f.is_file()]

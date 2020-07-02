@@ -1,5 +1,5 @@
 """
-Call signature: python clustsspatcov.py $TEMPDIR $PACKAGEDIR $NPROC $ANOMDIR $CLUSTERDIR $PATTERNDIR $OUTDIR
+Call signature: python dimreduce_precursors.py $TEMPDIR $PACKAGEDIR $NPROC $ANOMDIR $CLUSTERDIR $PATTERNDIR $OUTDIR
 Goal is to compute a dataframe of timeseries, defined on a daily resolution
 One series per variable and timeagg (distributed over files) and per lag and clustid (saved within patternfile)
 """
@@ -28,7 +28,7 @@ from Weave.src.inputoutput import Writer, Reader
 from Weave.src.utils import agg_time, Region
 from Weave.src.dimreduction import spatcov_multilag
 
-logging.basicConfig(filename= TMPDIR / 'spatcov.log', filemode='w', level=logging.DEBUG, format='%(process)d-%(relativeCreated)d-%(message)s')
+logging.basicConfig(filename= TMPDIR / 'dimreduce_precursors.log', filemode='w', level=logging.DEBUG, format='%(process)d-%(relativeCreated)d-%(message)s')
 firstday = pd.Timestamp('1981-01-01')
 responseclustid = 9
 timeaggs = [1, 3, 5, 7, 9, 11, 15]

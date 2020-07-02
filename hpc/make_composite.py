@@ -32,7 +32,7 @@ def set_quant(q, func):
 quant = 0.95
 composite1d = set_quant(q = quant, func = composite1d) # Decorate the composite1d to set the quantile
 
-logging.basicConfig(filename= TMPDIR / 'composites.log', filemode='w', level=logging.DEBUG, format='%(process)d-%(relativeCreated)d-%(message)s')
+logging.basicConfig(filename= TMPDIR / 'make_composite.log', filemode='w', level=logging.DEBUG, format='%(process)d-%(relativeCreated)d-%(message)s')
 #logging.basicConfig(filename= TMPDIR / 'testprecursor_spearman.log', filemode='w', level=logging.DEBUG, format='%(process)d-%(relativeCreated)d-%(message)s')
 # Open a response timeseries. And extract a certain cluster with a cluster template
 response = xr.open_dataarray(ANOMDIR / 't2m_europe.anom.nc')

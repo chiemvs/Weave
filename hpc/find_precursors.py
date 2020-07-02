@@ -24,8 +24,7 @@ from Weave.src.association import Associator
 from Weave.src.inputoutput import Writer
 from Weave.src.utils import agg_time, spearmanr_wrap, kendall_predictand #kendall_choice, chi
 
-logging.basicConfig(filename= TMPDIR / 'roll_kendall.log', filemode='w', level=logging.DEBUG, format='%(process)d-%(relativeCreated)d-%(message)s')
-#logging.basicConfig(filename= TMPDIR / 'testprecursor_spearman.log', filemode='w', level=logging.DEBUG, format='%(process)d-%(relativeCreated)d-%(message)s')
+logging.basicConfig(filename= TMPDIR / 'find_precursors.log', filemode='w', level=logging.DEBUG, format='%(process)d-%(relativeCreated)d-%(message)s')
 # Open a response timeseries. And extract a certain cluster with a cluster template
 response = xr.open_dataarray(ANOMDIR / 't2m_europe.anom.nc')
 clusterfield = xr.open_dataarray(CLUSTERDIR / 't2m-q095.nc').sel(nclusters = 14)
