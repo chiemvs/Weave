@@ -27,6 +27,12 @@ def get_nhplus() -> Region:
     """
     return(Region("nhplus", 90, -180, -40, 180))
 
+def get_nhnorm() -> Region:
+    """
+    This is the full northern hemisphere plus an equatorial band
+    """
+    return(Region("nhnorm", 90, -180, -20, 180))
+
 def get_nhmin() -> Region:
     """
     This is the part of the northern hemisphere experiencing snow cover and sea ice.
