@@ -31,7 +31,7 @@ from Weave.src.dimreduction import spatcov_multilag
 logging.basicConfig(filename= TMPDIR / 'dimreduce_precursors.log', filemode='w', level=logging.DEBUG, format='%(process)d-%(relativeCreated)d-%(message)s')
 firstday = pd.Timestamp('1981-01-01')
 responseclustid = 9
-timeaggs = [1, 3, 5, 7, 9, 11, 15]
+timeaggs = [1, 3, 5, 7, 9, 11, 15, 30]
 # Response timeseries is not linked to any of the processing of the response
 # Only the starting date is important. 
 # We will make a seperate response dataframe now first
@@ -61,7 +61,7 @@ else:
     logging.debug(f'previously existing file found at {response_output}, do nothing')
 
 # Only rolling aggregation is possible for intercomparing timescales, as those are equally (daily) stamped
-files = [ f for f in PATTERNDIR.glob('*corr.alpha*.nc') if f.is_file()]
+files = [ f for f in PATTERNDIR.glob('*corr.nc') if f.is_file()]
 #files = [Path('/scistor/ivm/jsn295/tcc_europe.15.corr.test.nc')]
 #to_reduce = ['snowc_nhmin','siconc_nhmin']
 # first level loop is variable / timeagg combinations over files
