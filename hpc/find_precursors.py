@@ -41,10 +41,11 @@ del response
 #files.remove('swvl2_europe.anom.nc')
 #files.remove('swvl3_europe.anom.nc')
 to_reduce = ['snowc','siconc'] # Variables that are reduced and stacked etc, such that they are not too large for parallel association
-files = ['sst_nhplus.anom.nc','swvl13_europe.anom.nc','z300_nhmin.anom.nc']
+files = ['sst_nhplus.anom.nc', 'z300_nhnorm.anom.nc', 'swvl13_europe.anom.nc']
 
 #timeaggs = [1, 3, 5, 7, 9, 11, 15] # Block/rolling aggregations.
 timeaggs = [1,7,30] # Block/rolling aggregations.
+#timeaggs = [30] # Block/rolling aggregations.
 # Open a precursor array
 for timeagg in timeaggs:
     # Determine the lags as a multiple of the timeagg
@@ -65,7 +66,7 @@ for timeagg in timeaggs:
             del ta
             ac = Associator(responseseries = summersubset, data = mean, laglist = laglist, association = spearmanr_wrap)
             del mean
-            corr = ac.compute(NPROC, alpha = 0.00005)
+            corr = ac.compute(NPROC, alpha = 5*10**(-6 - 0.2*timeagg)) # Variable alpha, ranges from 5e-6 to 5e-12 for timeaggs 1 to 30
             if varname in to_reduce:
                 example = xr.open_dataarray(ANOMDIR / inputfile)[0]
                 corr = corr.unstack('stacked').reindex_like(example) # For correct ordering of the coords

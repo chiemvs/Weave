@@ -27,6 +27,9 @@ from sklearn.cluster import DBSCAN
 from hdbscan import HDBSCAN
 from haversine import haversine_vector
 
+class MaskingError(Exception):
+    pass
+
 class Manipulator(object):
     """
     Standard Manipulator, will do no computation, only write the inarray to the desired outarray location
@@ -199,6 +202,8 @@ class Clustering(object):
                 mask = mask.stack(self.stackdim)
             logging.debug(f'{self} will mask out {(~mask).sum().values} of {self.array.shape[-1]} samples')
             self.array = self.array[:,mask.values]
+            if self.array.shape[-1] == 0: 
+                raise MaskingError('All samples have been masked out, cannot procede')
         
         # Capture the coords of data after masking.
         self.samplecoords = self.array.coords[self.array.dims[-1]]

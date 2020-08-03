@@ -10,3 +10,4 @@ statsmodels==0.11.1
 pytest==5.4.3
 haversine==2.2.0
 pyarrow==0.17.1
+hdbscan==0.8.26
