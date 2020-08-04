@@ -34,23 +34,23 @@ response.close()
 del response
 
 # Scan for present anomaly files. 
-#files = [ f.parts[-1] for f in ANOMDIR.glob('*anom.nc') if f.is_file()]
-## Don't do the response itself
-#files.remove('t2m_europe.anom.nc')
-#files.remove('swvl1_europe.anom.nc') # We only want to keep the merged one: swvl13
-#files.remove('swvl2_europe.anom.nc')
-#files.remove('swvl3_europe.anom.nc')
+files = [ f.parts[-1] for f in ANOMDIR.glob('*anom.nc') if f.is_file()]
+# Don't do the response itself
+files.remove('t2m_europe.anom.nc')
+files.remove('swvl1_europe.anom.nc') # We only want to keep the merged one: swvl13
+files.remove('swvl2_europe.anom.nc')
+files.remove('swvl3_europe.anom.nc')
+files.remove('z300_nhmin.anom.nc') # Only nhnorm retained
 to_reduce = ['snowc','siconc'] # Variables that are reduced and stacked etc, such that they are not too large for parallel association
-files = ['sst_nhplus.anom.nc', 'z300_nhnorm.anom.nc', 'swvl13_europe.anom.nc']
+#files = ['sst_nhplus.anom.nc', 'z300_nhnorm.anom.nc', 'swvl13_europe.anom.nc']
 
-#timeaggs = [1, 3, 5, 7, 9, 11, 15] # Block/rolling aggregations.
-timeaggs = [1,7,30] # Block/rolling aggregations.
-#timeaggs = [30] # Block/rolling aggregations.
+timeaggs = [1, 3, 5, 7, 11, 15, 21, 31] # Block/rolling aggregations.
+#timeaggs = [1,7,30] # Block/rolling aggregations.
 # Open a precursor array
 for timeagg in timeaggs:
-    # Determine the lags as a multiple of the timeagg
     #laglist = [-1, -3, -5, -7, -9, -11, -15, -20, -25, -30, -35, -40, -45] #list(timeagg * np.arange(1,11))
-    laglist = list(np.array([0, -6, -19, -30], dtype = np.int32) - timeagg) # Dynamic lagging to avoid overlap
+    absolute_separation = np.array([0,1,3,5,7,11,15,21,31]) # Days inbetween end of precursor and beginning of response 
+    laglist = [0,] + list(-timeagg - absolute_separation) # Dynamic lagging to avoid overlap, lag zero is the overlap
     # Aggregate the response, subset and detrend
     responseagg = agg_time(array = reduced, ndayagg = timeagg, method = 'mean', rolling = True, firstday = pd.Timestamp('1981-01-01'))
     summersubset = responseagg[responseagg.time.dt.season == 'JJA']
@@ -66,7 +66,7 @@ for timeagg in timeaggs:
             del ta
             ac = Associator(responseseries = summersubset, data = mean, laglist = laglist, association = spearmanr_wrap)
             del mean
-            corr = ac.compute(NPROC, alpha = 5*10**(-6 - 0.2*timeagg)) # Variable alpha, ranges from 5e-6 to 5e-12 for timeaggs 1 to 30
+            corr = ac.compute(NPROC, alpha = 5*10**(-6 - 0.2*(timeagg-1))) # Variable alpha, ranges from 5e-6 to 5e-12 for timeaggs 1 to 31
             if varname in to_reduce:
                 example = xr.open_dataarray(ANOMDIR / inputfile)[0]
                 corr = corr.unstack('stacked').reindex_like(example) # For correct ordering of the coords
