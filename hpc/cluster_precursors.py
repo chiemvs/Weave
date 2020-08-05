@@ -1,6 +1,6 @@
 """
 Call signature: python cluster_precursors.py $TEMPDIR $PACKAGEDIR $NPROC $PATTERNDIR
-Reading of a correlation field. DBSCAN clustering on spatial distance
+Reading of a correlation field. HDBSCAN clustering on spatial distance
 Will write clustids inside the files of the patterndir
 """
 import sys
@@ -9,7 +9,7 @@ import numpy as np
 import xarray as xr
 import pandas as pd
 from pathlib import Path
-from sklearn.cluster import DBSCAN
+#from sklearn.cluster import DBSCAN
 from hdbscan import HDBSCAN
 
 TMPDIR = Path(sys.argv[1])
@@ -24,24 +24,31 @@ from Weave.src.clustering import Clustering, haversine_worker, Latlons, MaskingE
 
 logging.basicConfig(filename= TMPDIR / 'cluster_precursors.log', filemode='w', level=logging.DEBUG, format='%(process)d-%(relativeCreated)d-%(message)s')
 
+# Clusterkwargs for hdbscan, coming from manual selection
+hdbscan_kwargs = pd.DataFrame([[2000,600],[5000,2000],[True,False]], columns = ['z300','standard'], index = ['min_samples','min_cluster_size','allow_single_cluster'])
+hdbscan_kwargs.loc['metric',:] = 'haversine'
+hdbscan_kwargs.loc['core_dist_n_jobs',:] = NPROC
 corrfiles = [ f for f in PATTERNDIR.glob('*corr.nc') if f.is_file() ]
-#corrfiles = [PATTERNDIR / 'sst_nhplus.7.corr.nc']
 
 # first level loop are association metric files, so variable / timeagg combinations
 # The goal is to cluster these patterns based on distance on the globe
 for corrpath in corrfiles:
     filename = corrpath.parts[-1]
+    variable = filename.split('.')[0].split('_')[0] 
     invarname = 'correlation'
     outvarname = 'clustid'
     ds = xr.open_dataset(corrpath, decode_times = False)
     already_clustered = hasattr(ds, outvarname)
     lags = ds.coords['lag'].values.tolist() # Lag was getting decoded. This is now solved with decode_lag passing to decode_times in xarray.
+    if variable in hdbscan_kwargs:
+        clusterkwargs = hdbscan_kwargs[variable].to_dict() # Non-standard if present
+    else:
+        clusterkwargs = hdbscan_kwargs['standard'].to_dict()
     
     if not already_clustered: 
         combined = []
         attrs = {}
         for lag in lags:
-            clusterkwargs = dict(min_samples = 600, min_cluster_size=2000, metric = 'haversine', core_dist_n_jobs = NPROC)
             cl = Clustering()
             try:
                 cl.reshape_and_drop_obs(array = ds[invarname], mask = ~ds[invarname].sel(lag = lag).isnull())
@@ -63,6 +70,7 @@ for corrpath in corrfiles:
         
         temp = xr.concat(combined, dim = pd.Index(lags, name = 'lag'))
         ds.close() # Need to close before writer can access
+        attrs.update({key:str(item) for key,item in clusterkwargs.items()})
         w = Writer(corrpath,varname = outvarname) # Should be able to find the dataformat
         w.create_dataset(example = temp)
         w.write(array = temp, units = '', attrs = attrs) 

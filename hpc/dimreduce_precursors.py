@@ -26,12 +26,12 @@ sys.path.append(PACKAGEDIR)
 from Weave.src.processing import TimeAggregator
 from Weave.src.inputoutput import Writer, Reader
 from Weave.src.utils import agg_time, Region
-from Weave.src.dimreduction import spatcov_multilag
+from Weave.src.dimreduction import spatcov_multilag, mean_singlelag
 
 logging.basicConfig(filename= TMPDIR / 'dimreduce_precursors.log', filemode='w', level=logging.DEBUG, format='%(process)d-%(relativeCreated)d-%(message)s')
 firstday = pd.Timestamp('1981-01-01')
 responseclustid = 9
-timeaggs = [1, 3, 5, 7, 9, 11, 15, 30]
+timeaggs = [1, 3, 5, 7, 11, 15, 21, 31] 
 # Response timeseries is not linked to any of the processing of the response
 # Only the starting date is important. 
 # We will make a seperate response dataframe now first
@@ -63,14 +63,13 @@ else:
 # Only rolling aggregation is possible for intercomparing timescales, as those are equally (daily) stamped
 files = [ f for f in PATTERNDIR.glob('*corr.nc') if f.is_file()]
 #files = [Path('/scistor/ivm/jsn295/tcc_europe.15.corr.test.nc')]
-#to_reduce = ['snowc_nhmin','siconc_nhmin']
 # first level loop is variable / timeagg combinations over files
 # Each file has unique clustid shapes per lag, so the
 # Second level of the loop is over the lags contained within the file
 # The third level is then the clustids. 
-# On that subset we call the timeaggregatorm and compute spatial covariance, this increases read access
-# Internal to spatcov multlilag we have the multiple lags, contained within the file
-spatcovs = []
+# On that subset we call the timeaggregator and compute spatial covarianceand mean, this increases read access
+# Internal to spatcov multlilag we have the multiple lags, contained within the file, but this is not used because domains do not overlap
+outcomes = [] # Collects both spatcov and mean
 for inputpath in files:
     filename = inputpath.parts[-1]
     variable, timeagg = filename.split('.')[:2]
@@ -83,32 +82,39 @@ for inputpath in files:
     nclusters = ds['clustid'].groupby('lag').apply(find_nunique)
     lags = nclusters.coords["lag"].values
     if np.any(nclusters.values > 0):
-        logging.info(f'{nclusters.values.squeeze()} clusters found for lags {lags} in patternfile {inputpath}')
+        logging.info(f'{nclusters.values.squeeze()} clusters found for lags {lags} in patternfile {inputpath}, proceed to aggregation')
         # We are going to do a full aggregation once, to cover all lags and clustids
         # But slightly shrink the domain
-        in_a_cluster = ds['clustid'].isnull().any('lag') # 2D, False if not in a cluster
+        in_a_cluster = (~ds['clustid'].isnull()).any('lag') # 2D, False if not in a cluster
         in_a_cluster = in_a_cluster.stack({'latlon':['latitude','longitude']}) # 1D for boolean indexing
         in_a_cluster = in_a_cluster[in_a_cluster]
         subdomain = Region('subdomain', float(in_a_cluster.latitude.max()), float(in_a_cluster.longitude.min()), float(in_a_cluster.latitude.min()), float(in_a_cluster.longitude.max())) 
         ta = TimeAggregator(datapath = anompath, share_input = True, reduce_input = False, region = subdomain) # We are going to do a full aggregation once, to cover all lags and clustids
         mean = ta.compute(nprocs = NPROC, ndayagg = int(timeagg), method = 'mean', firstday = firstday, rolling = True)
         mean = mean[np.logical_or(mean.time.dt.season == 'MAM',mean.time.dt.season == 'JJA')] # Throw away some values to reduce memoty cost of grouping but still keeping the ability to lag into previous season.
-        ds = ds.reindex_like(mean) # Since the time aggregated version has the potential to be a subset
+        ds = ds.reindex_like(mean) # Since the time aggregated version has the potential to be a spatial subset
         ds[mean.name] = mean # Should not copy the data
         for lag in lags:
-            logging.debug(f'starting clustersubset, n = {int(nclusters.sel(lag = lag))} for lag {lag}')
-            gr = ds.sel(lag = lag).groupby('clustid') # Nan clustids are discarded in grouping
-            for clustid, subset in gr:
-                pattern = subset['correlation'].expand_dims({'lag':1}, axis = 0)
-                spatcov = spatcov_multilag(pattern, subset[mean.name], laglist = [lag]) # Not really mutlilag. But then the pattern is also unique to the lag
-                spatcov = spatcov.squeeze().drop('lag').to_dataframe()
-                spatcov.columns = pd.MultiIndex.from_tuples([(variable,int(timeagg),int(lag),int(clustid))], names = ['variable','timeagg','lag','clustid'])
-                spatcovs.append(spatcov)
+            ncluster = int(nclusters.sel(lag = lag))
+            if ncluster > 0:
+                logging.debug(f'starting clustersubset, n = {ncluster} for lag {lag}')
+                gr = ds.sel(lag = lag).groupby('clustid') # Nan clustids are discarded in grouping
+                for clustid, subset in gr:
+                    pattern = subset['correlation'].expand_dims({'lag':1}, axis = 0) # Otherwise it does not fit into the spatcov function
+                    spatcov = spatcov_multilag(pattern, subset[mean.name], laglist = [lag]) # Not really mutlilag. But then the pattern is also unique to the lag
+                    spatcov = spatcov.squeeze().drop('lag').to_dataframe()
+                    spatcov.columns = pd.MultiIndex.from_tuples([(variable,int(timeagg),int(lag),int(lag)-int(timeagg),int(clustid),'spatcov')], names = ['variable','timeagg','lag','separation','clustid','metric'])
+                    outcomes.append(spatcov)
+                    clustmean = mean_singlelag(precursor = subset[mean.name], lag = int(lag)).to_dataframe()
+                    clustmean.columns = pd.MultiIndex.from_tuples([(variable,int(timeagg),int(lag),int(lag)-int(timeagg),int(clustid),'mean')], names = ['variable','timeagg','lag','separation','clustid','metric'])
+                    outcomes.append(clustmean)
+            else:
+                logging.debug(f'no clusters at lag {lag}')
         del ta, mean, ds, gr
     else:
-        logging.info(f'no clusters found in patternfile {inputpath}')
+        logging.info(f'no clusters found in for all lags: {lags} in patternfile {inputpath}')
     logging.info('on to next variable/timeagg')
 
-final = pd.concat(spatcovs, axis = 1, join = 'outer')
+final = pd.concat(outcomes, axis = 1, join = 'outer')
 outpath = OUTDIR / '.'.join(['precursor','multiagg','parquet']) 
 pq.write_table(pa.Table.from_pandas(final), outpath)
