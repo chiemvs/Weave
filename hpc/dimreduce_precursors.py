@@ -103,10 +103,10 @@ for inputpath in files:
                     pattern = subset['correlation'].expand_dims({'lag':1}, axis = 0) # Otherwise it does not fit into the spatcov function
                     spatcov = spatcov_multilag(pattern, subset[mean.name], laglist = [lag]) # Not really mutlilag. But then the pattern is also unique to the lag
                     spatcov = spatcov.squeeze().drop('lag').to_dataframe()
-                    spatcov.columns = pd.MultiIndex.from_tuples([(variable,int(timeagg),int(lag),int(lag)-int(timeagg),int(clustid),'spatcov')], names = ['variable','timeagg','lag','separation','clustid','metric'])
+                    spatcov.columns = pd.MultiIndex.from_tuples([(variable,int(timeagg),int(lag),int(lag)+int(timeagg),int(clustid),'spatcov')], names = ['variable','timeagg','lag','separation','clustid','metric'])
                     outcomes.append(spatcov)
                     clustmean = mean_singlelag(precursor = subset[mean.name], lag = int(lag)).to_dataframe()
-                    clustmean.columns = pd.MultiIndex.from_tuples([(variable,int(timeagg),int(lag),int(lag)-int(timeagg),int(clustid),'mean')], names = ['variable','timeagg','lag','separation','clustid','metric'])
+                    clustmean.columns = pd.MultiIndex.from_tuples([(variable,int(timeagg),int(lag),int(lag)+int(timeagg),int(clustid),'mean')], names = ['variable','timeagg','lag','separation','clustid','metric'])
                     outcomes.append(clustmean)
             else:
                 logging.debug(f'no clusters at lag {lag}')

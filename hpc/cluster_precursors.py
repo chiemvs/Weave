@@ -38,6 +38,7 @@ for corrpath in corrfiles:
     invarname = 'correlation'
     outvarname = 'clustid'
     ds = xr.open_dataset(corrpath, decode_times = False)
+    logging.debug(f'{filename} has been loaded.')
     already_clustered = hasattr(ds, outvarname)
     lags = ds.coords['lag'].values.tolist() # Lag was getting decoded. This is now solved with decode_lag passing to decode_times in xarray.
     if variable in hdbscan_kwargs:
@@ -45,7 +46,7 @@ for corrpath in corrfiles:
     else:
         clusterkwargs = hdbscan_kwargs['standard'].to_dict()
     
-    if not already_clustered: 
+    if (not already_clustered): # and (filename != 'z300_nhnorm.31.corr.nc'): 
         combined = []
         attrs = {}
         for lag in lags:
@@ -75,4 +76,5 @@ for corrpath in corrfiles:
         w.create_dataset(example = temp)
         w.write(array = temp, units = '', attrs = attrs) 
     else:
+        logging.debug(f'{filename} was already clustered')
         ds.close()
