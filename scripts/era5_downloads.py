@@ -10,8 +10,8 @@ import logging
 from pathlib import Path
 
 sys.path.append('..')
-from src.utils import get_europe, get_nhplus, get_nhmin, get_nhblock
-from src.downloaders import CDSDownloader, DataOrganizer, DataMerger
+from Weave.utils import get_europe, get_nhplus, get_nhmin, get_nhblock
+from Weave.downloaders import CDSDownloader, DataOrganizer, DataMerger
 
 logging.basicConfig(filename='t850.log', filemode='w', level=logging.DEBUG, format='%(process)d-%(levelname)s-%(message)s')
 #d = DataOrganizer(varname = 'z500', region = get_nhmin(), operation = '12UTC')

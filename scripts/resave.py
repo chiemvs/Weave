@@ -7,7 +7,7 @@ PACKAGEDIR = sys.argv[2]
 
 sys.path.append(PACKAGEDIR)
 
-from Weave.src.inputoutput import Writer
+from Weave.inputoutput import Writer
 
 filepaths = list(CLUSTERDIR.glob('*.nc'))
 for path in filepaths:

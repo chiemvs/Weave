@@ -19,8 +19,8 @@ PATTERNDIR = Path(sys.argv[4])
 
 sys.path.append(PACKAGEDIR)
 
-from Weave.src.inputoutput import Writer, Reader
-from Weave.src.clustering import Clustering, haversine_worker, Latlons, MaskingError
+from Weave.inputoutput import Writer, Reader
+from Weave.clustering import Clustering, haversine_worker, Latlons, MaskingError
 
 logging.basicConfig(filename= TMPDIR / 'cluster_precursors.log', filemode='w', level=logging.DEBUG, format='%(process)d-%(relativeCreated)d-%(message)s')
 

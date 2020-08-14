@@ -19,16 +19,18 @@ OUTDIR = Path(sys.argv[6])
 
 sys.path.append(PACKAGEDIR)
 
-from Weave.src.processing import TimeAggregator
-from Weave.src.association import Associator
-from Weave.src.inputoutput import Writer
-from Weave.src.utils import agg_time, spearmanr_wrap, kendall_predictand #kendall_choice, chi
+from Weave.processing import TimeAggregator
+from Weave.association import Associator
+from Weave.inputoutput import Writer
+from Weave.utils import agg_time, spearmanr_wrap, kendall_predictand #kendall_choice, chi
 
 logging.basicConfig(filename= TMPDIR / 'find_precursors.log', filemode='w', level=logging.DEBUG, format='%(process)d-%(relativeCreated)d-%(message)s')
 # Open a response timeseries. And extract a certain cluster with a cluster template
 response = xr.open_dataarray(ANOMDIR / 't2m_europe.anom.nc')
 clusterfield = xr.open_dataarray(CLUSTERDIR / 't2m-q095.nc').sel(nclusters = 14)
-reduced = response.groupby(clusterfield).mean('stacked_latitude_longitude')
+#reduced = response.groupby(clusterfield).mean('stacked_latitude_longitude')
+#reduced = reduced.sel(clustid = 9) # In this case cluster 9 is western europe.
+reduced = response.groupby(clusterfield).quantile(q = 0.8, dim = 'stacked_latitude_longitude')
 reduced = reduced.sel(clustid = 9) # In this case cluster 9 is western europe.
 response.close()
 del response

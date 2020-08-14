@@ -19,10 +19,10 @@ OUTDIR = Path(sys.argv[6])
 
 sys.path.append(PACKAGEDIR)
 
-from Weave.src.processing import TimeAggregator
-from Weave.src.association import Associator, composite, composite1d
-from Weave.src.inputoutput import Writer
-from Weave.src.utils import agg_time
+from Weave.processing import TimeAggregator
+from Weave.association import Associator, composite, composite1d
+from Weave.inputoutput import Writer
+from Weave.utils import agg_time
 
 def set_quant(q, func):
     def wrapper(*args, **kwargs):

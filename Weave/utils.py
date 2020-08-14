@@ -12,6 +12,8 @@ import ctypes as ct
 from collections import namedtuple
 from typing import Union, Callable, Tuple
 from scipy.stats import rankdata, spearmanr, pearsonr, weightedtau, t
+from sklearn.linear_model import LinearRegression
+from sklearn.preprocessing import scale
 
 Region = namedtuple("Region", ["name", "latmax","lonmin", "latmin", "lonmax"])
 
@@ -287,3 +289,30 @@ def add_pvalue(func: Callable) -> Callable:
         
     return wrapper
 
+def get_timeserie_properties(series: pd.Series, submonths: list = None, scale_trend_intercept = True, auto_corr_at: list = [1,5]) -> pd.Series:
+    """ 
+    Function to be called on a timeseries (does not need to be contiguous)
+    Extracts some statistics that can be of interest and returns them as a Series
+    If you want only certain months submonths of the series to be taken into account that provide those as a list of integers 
+    Also it tries to lag the series with a given number of days, to compute autocorrelation
+    """
+    if not submonths is None:
+        series = series.loc[series.index.month.map(lambda m: m in submonths)]
+    std = series.std()
+    mean = series.mean() 
+    length = len(series)
+    n_nan = series.isna().sum()
+    series = series.dropna() # Remove nans
+    lm = LinearRegression()
+    if scale_trend_intercept:
+        lm.fit(y = scale(series), X = series.index.year.values.reshape(-1,1))
+    else:
+        lm.fit(y = series, X = series.index.year.values.reshape(-1,1))
+    trend = float(lm.coef_) # (standardized) coefficient / yr
+    intercept = lm.intercept_
+    # Smoothness is the autocorrelation at a lag of 1 day and 5 days.
+    results = pd.Series({'std':std,'mean':mean,'length':length, 'n_nan':n_nan,'trend':trend, 'intercept':intercept})
+    for lag in auto_corr_at:
+        lagged = pd.Series(series.values, index = series.index - pd.Timedelta(f'{lag}D'), name = f'{lag}D')
+        results.loc[f'auto{lag}'] = pd.merge(left = series, right = lagged, left_index=True, right_index=True, how = 'inner').corr().iloc[0,-1]
+    return(results)

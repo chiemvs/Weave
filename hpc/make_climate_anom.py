@@ -18,8 +18,8 @@ OUTDIR = Path(sys.argv[5])
 
 sys.path.append(PACKAGEDIR)
 
-from Weave.src.processing import ClimateComputer, AnomComputer, TimeAggregator
-from Weave.src.inputoutput import Writer 
+from Weave.processing import ClimateComputer, AnomComputer, TimeAggregator
+from Weave.inputoutput import Writer 
 
 if __name__ == '__main__':
     logging.basicConfig(filename= TMPDIR / 'make_climate_anom.log', filemode='w', level=logging.DEBUG, format='%(process)d-%(relativeCreated)d-%(message)s')

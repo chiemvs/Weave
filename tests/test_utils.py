@@ -4,7 +4,7 @@ import pandas as pd
 import pytest
 from scipy.stats import pearsonr
 
-from src.utils import nanquantile, bootstrap, add_pvalue, kendall_predictand, spearmanr_wrap, agg_time
+from Weave.utils import nanquantile, bootstrap, add_pvalue, kendall_predictand, spearmanr_wrap, agg_time, get_timeserie_properties
 
 @pytest.fixture()
 def supply_testfunc():
@@ -66,6 +66,18 @@ def test_agg_time():
     assert len(rolling) == 11 - 2, "rolling aggregation with window size 3 should result in two less left-stamped observation"
     blocks_start = agg_time(serie, ndayagg = 3, rolling = False, firstday = pd.Timestamp('2000-01-04'))
     assert len(blocks_start) == (11 - 3) // 3, "block aggregation with size 3 should result in the exact amount of full blocks that fit within the timeseries after the given first day"
+
+def test_get_timeserie_properties():
+    """
+    Tests if statistics of standard normal n(0,1) are captured correctly
+    """
+    data = np.random.normal(size = 10000)
+    data = pd.Series(data,name = 'test', index = pd.date_range('2000-01-01', periods = 10000, freq = 'D'))
+    results = get_timeserie_properties(data)
+    assert np.isclose(results['mean'], 0, atol = 5e-2), "Mean of random normal data should be 0"  
+    assert np.isclose(results['std'], 1, atol = 5e-2), "standard deviation of random normal data should be 1"  
+    assert np.isclose(results['auto1'], 0, atol = 5e-2), "Autocorr of random normal data should be 0"  
+    assert np.isclose(results['trend'], 0, atol = 5e-2), "Trend of random normal data should be 0"  
 
 # No testing, only profiling, either with timeit or cProfile. 
 dummydat = np.random.random((1000,2))

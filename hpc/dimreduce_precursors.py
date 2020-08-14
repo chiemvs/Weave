@@ -23,10 +23,10 @@ OUTDIR = Path(sys.argv[7])
 
 sys.path.append(PACKAGEDIR)
 
-from Weave.src.processing import TimeAggregator
-from Weave.src.inputoutput import Writer, Reader
-from Weave.src.utils import agg_time, Region
-from Weave.src.dimreduction import spatcov_multilag, mean_singlelag
+from Weave.processing import TimeAggregator
+from Weave.inputoutput import Writer, Reader
+from Weave.utils import agg_time, Region
+from Weave.dimreduction import spatcov_multilag, mean_singlelag
 
 logging.basicConfig(filename= TMPDIR / 'dimreduce_precursors.log', filemode='w', level=logging.DEBUG, format='%(process)d-%(relativeCreated)d-%(message)s')
 firstday = pd.Timestamp('1981-01-01')

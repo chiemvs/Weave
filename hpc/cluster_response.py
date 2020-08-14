@@ -15,8 +15,8 @@ OUTDIR = Path(sys.argv[5])
 
 sys.path.append(PACKAGEDIR)
 
-from Weave.src import clustering as cl
-from Weave.src.inputoutput import Writer
+from Weave.clustering import Clustering
+from Weave.inputoutput import Writer
 
 # E-OBS part, has a very large memory footprint and thus seems to work best with 5 workers and shared reading memory
 #logging.basicConfig(filename= OBSDIR / 'eobs_cluster3D_DJF.log', filemode='w', level=logging.DEBUG, format='%(asctime)s-%(process)d-%(levelname)s-%(message)s', datefmt='%m-%d %H:%M:%S')
@@ -29,7 +29,7 @@ from Weave.src.inputoutput import Writer
 #mask = ~ o.array[0].isnull()
 ##mask[mask['latitude'] < 60,:] = False
 #
-#c = cl.Clustering(varname = 'tg3DDJF', storedir = Path(TMPDIR))
+#c = Clustering(varname = 'tg3DDJF', storedir = Path(TMPDIR))
 #c.reshape_and_drop_obs(array = o.array, season='DJF', mask=mask) # Avoid the load method of the class.
 #del o
 #c.prepare_for_distance_algorithm(where='shared', manipulator=cl.Lagshift, kwargs={'lags':list(range(-20,21))})
@@ -49,7 +49,7 @@ mask = siconc.sel(latitude = t2m['latitude'], longitude = t2m['longitude']).isnu
 #mask[mask['latitude'] < 60,:] = False
 siconc.close()
 t2m.close()
-c = cl.Clustering(varname = 't2m', groupname = 'mean', storedir = Path(TMPDIR), varpath = OBSDIR / 't2m_europe.nc')
+c = Clustering(varname = 't2m', groupname = 'mean', storedir = Path(TMPDIR), varpath = OBSDIR / 't2m_europe.nc')
 c.reshape_and_drop_obs(season='JJA', mask=mask)
 
 c.prepare_for_distance_algorithm(where=None, manipulator=cl.Exceedence, kwargs={'quantile':0.98})

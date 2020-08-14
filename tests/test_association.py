@@ -3,8 +3,8 @@ import xarray as xr
 import pandas as pd
 from scipy.signal import detrend
 
-from src.association import Associator, init_worker, lag_subset_detrend_associate 
-from src.utils import pearsonr_wrap
+from Weave.association import Associator, init_worker, lag_subset_detrend_associate 
+from Weave.utils import pearsonr_wrap
 
 
 def speed_lagging_subset():
