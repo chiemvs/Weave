@@ -9,7 +9,6 @@ import itertools
 
 from typing import Callable
 from collections import OrderedDict
-from scipy.signal import detrend
 from sklearn.model_selection import KFold
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.metrics import mean_squared_error, r2_score, mean_absolute_error
@@ -108,50 +107,61 @@ def hyperparam_evaluation(model: Callable, X_in, y_in, hyperparams: dict, other_
     full.columns.names = list(keynames)
     return full
 
-def permute_importance(model: Callable, single_only: bool = False):
+def permute_importance(model: Callable, X_in, y_in, X_val = None, y_val = None, evaluation_fn = mean_absolute_error, scoring_strategy = 'argmax_of_mean', perm_imp_kwargs: dict = dict(nimportant_vars = 8, njobs = -1, nbootstrap = 500), single_only: bool = False, n_folds = 10):
     """
     Calls permutation importance functionality 
     This functionality does single-multi-pass permutation on the validation part of the data
-    If model is already fitted then data is intepreted as validation data only
-    If model is not yet fitted then data is interpreted as validation/training set
-    And it proceeds in a cross validation setting
+    The model should be initialized but not fitted
+    If only X_in and y_in are supplied, then data is intepreted as the complete validation/training set
+    on which cross validation is called.
+    perm_imp_kwargs are mainly computational arguments
     """
-    # Use similar setup as fit_predict_evaluate, with an inner_func
-    kf = KFold(n_splits=n_folds)
-    results = []
-    for train_index, val_index in kf.split(X): # This generates integer indices, ultimately pure numpy and slices would give views. No copy of data, better for distributed
-        if isinstance(X, pd.DataFrame):
-            X_t_fold, X_v_fold = X_in.iloc[train_index,:], X_in.iloc[val_index]
-            y_t_fold, y_v_fold = y_in.iloc[train_index], y_in.iloc[val_index]
-        else:
-            X_t_fold, X_v_fold = X_in[train_index,:], X_in[val_index,:]
-            y_t_fold, y_v_fold = y_in[train_index], y_in[val_index]
-        model.fit(X = X_t_fold, y=y_t_fold)
-        preds = model.predict(X = X_v_fold)
-        results.append(evaluate(y_true = y_v_fold, y_pred = preds))
-Y_path = '/nobackup_1/users/straaten/spatcov/response.multiagg.trended.parquet'
-X_path = '/nobackup_1/users/straaten/spatcov/precursor.multiagg.parquet'
-y = pd.read_parquet(Y_path).loc[:,(slice(None),5,slice(None))].iloc[:,0] # Only summer
-X = pd.read_parquet(X_path).loc[y.index, (slice(None),slice(None),slice(None),-6)].dropna(axis = 0, how = 'any')
-y = y.reindex(X.index)
-y = pd.Series(detrend(y), index = y.index, name = y.name) # Also here you see that detrending improves Random forest performance a bit
+    if single_only:
+        perm_imp_kwargs.update(dict(n_important_vars = 1)) # Only one pass neccessary
 
-hyperparams = dict(max_depth = [None,10,20,30], min_samples_split = [5,10,20,50,100,300])
-#hyperparams = dict(min_samples_split = [10,20,50,100,300])
-other_kwds = dict(n_jobs = 7, max_depth = None)
-#ret = hyperparam_evaluation(RandomForestRegressor, X, y, hyperparams, other_kwds)
-# Small min_samples_split? But difficult to see real trends in the hyperparams as generally not a very skillful situation in this small case study. Deeper than this max-depth seems better
+    # Use similar setup as fit_predict_evaluate, with an inner_func that is potentially called multiple times
+    def inner_func(model, X_train, y_train, X_val: pd.DataFrame, y_val: pd.Series) -> pd.DataFrame:
+        model.fit(X = X_train, y = y_train)
+        y_val = y_val.to_frame() # Required form for perm imp
+        X_val.columns = ['.'.join([str(c) for c in col]) for col in X_val.columns.values] # Collapse of the index is required unfortunately
+        result = sklearn_permutation_importance(model = model, scoring_data = (X_val, y_val), evaluation_fn = evaluation_fn, scoring_strategy = scoring_strategy, variable_names = X_val.columns.values, **perm_imp_kwargs)
+        singlepass = result.retrieve_singlepass()
+        singlepass_rank_scores = pd.DataFrame([{'rank':tup[0], 'score':np.mean(tup[1])} for tup in singlepass.values()]) # We want to export both rank and mean score. (It is allowed to average here over all bootstraps even when this happens in one fold of the cross validation, as the grand mean will be equal as group sizes are equal over all cv-folds)
+        singlepass_rank_scores.index = pd.MultiIndex.from_tuples([tuple(string.split('.')) for string in singlepass.keys()], names = X_train.columns.names)
+        if single_only:
+            return singlepass_rank_scores
+        else: # Multipass dataframe probably contains the scores and ranks of only a subset of nimportant_vars variables, nrows is smaller than singlepass
+            multipass = result.retrieve_multipass()
+            multipass_rank_scores = pd.DataFrame([{'rank':tup[0], 'score':np.mean(tup[1])} for tup in multipass.values()])
+            multipass_rank_scores.index = pd.MultiIndex.from_tuples([tuple(string.split('.')) for string in multipass.keys()], names = X_train.columns.names)
+            multipass_rank_scores.columns = pd.MultiIndex.from_product([['multipass'], multipass_rank_scores.columns])# Add levels for the merging
+            singlepass_rank_scores.columns = pd.MultiIndex.from_product([['singlepass'], singlepass_rank_scores.columns])# Add levels for the merging
+            return singlepass_rank_scores.join(multipass_rank_scores, how = 'left') # Index based merge
 
-model = RandomForestRegressor(max_depth = 40, min_samples_split = 50, n_jobs = 7)
-ret = fit_predict_evaluate(model, X, y)
-#model.fit(X = X.iloc[:int(0.8 * len(y)),:], y = y.iloc[:int(0.8 * len(y))]) 
-#valx = X.iloc[int(0.8 * len(y)):,:]
-#valx.columns = ['.'.join([str(c) for c in col]) for col in valx.columns.values] # Collapse of the index is required unfortunately
-#valy = y.iloc[int(0.8 * len(y)):].to_frame() # Required form by permimp
-#
-#result = sklearn_permutation_importance(model, (valx,valy), mean_squared_error, 'argmax_of_mean', variable_names = valx.columns.values, nbootstrap = 500, subsample = 1, nimportant_vars = 8, njobs = 7)
-#singlepass = result.retrieve_singlepass() # ordered Dictionary with tuples of (rank, n_boots_trap_scores) for each variable name
-#ranksingle = pd.Series([tup[0] for tup in singlepass.values()], index = singlepass.keys())
-## beyond the ranks, should I perhaps combine the bootstrapped score in the cross validation setup?u
-#multipass = result.retrieve_multipass()
-#rankmulti = pd.Series([tup[0] for tup in multipass.values()], index = multipass.keys())
+    if (X_val is None) or (y_val is None):
+        f = crossvalidate(n_folds = n_folds)(inner_func)
+        return f(model = model, X_in = X_in, y_in = y_in) # Conversion of kwargs from X_in/y_in to X_train/y_train and X_val/y_val happens inside the decorating wrapper function
+    else:
+        return inner_func(model = model, X_train = X_in, y_train = y_in, X_val = X_val, y_val = y_val) 
+
+if __name__ == '__main__':
+    from scipy.signal import detrend
+    Y_path = '/nobackup_1/users/straaten/spatcov/response.multiagg.trended.parquet'
+    X_path = '/nobackup_1/users/straaten/spatcov/precursor.multiagg.parquet'
+    y = pd.read_parquet(Y_path).loc[:,(slice(None),5,slice(None))].iloc[:,0] # Only summer
+    X = pd.read_parquet(X_path).loc[y.index, (slice(None),slice(None),slice(None),-6)].dropna(axis = 0, how = 'any')
+    y = y.reindex(X.index)
+    y = pd.Series(detrend(y), index = y.index, name = y.name) # Also here you see that detrending improves Random forest performance a bit
+    
+    #hyperparams = dict(max_depth = [None,10,20,30], min_samples_split = [5,10,20,50,100,300])
+    #hyperparams = dict(min_samples_split = [10,20,50,100,300])
+    #other_kwds = dict(n_jobs = 7, max_depth = None)
+    #ret = hyperparam_evaluation(RandomForestRegressor, X, y, hyperparams, other_kwds)
+    # Small min_samples_split? But difficult to see real trends in the hyperparams as generally not a very skillful situation in this small case study. Deeper than this max-depth seems better
+    
+    #m = RandomForestRegressor(max_depth = 40, min_samples_split = 50, n_jobs = 7 )
+    #ret = permute_importance(m, X_in = X, y_in = y, perm_imp_kwargs = dict(nimportant_vars = 8, njobs = 7, nbootstrap = 200))
+    ## Select most important variables has become easy, but quite variabe over all folds
+    #ret.loc[ret.loc[:,('multipass','rank')] == 0,:]
+    ## Mean ranks / scores over all folds:
+    #meanimp = ret.groupby(['variable','timeagg','lag','separation','clustid','metric']).mean()
