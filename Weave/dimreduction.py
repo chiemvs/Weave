@@ -39,3 +39,17 @@ def spatcov_multilag(pattern: xr.DataArray, precursor: xr.DataArray, laglist: li
         allseries.loc[{pattern.dims[0]:lag}] = oneserie.reindex_like(allseries) # Write the lagged stamped values
         logging.debug(f'finished lagging ntimes: {len(oneserie)} with lag: {lag}')
     return(allseries)
+
+def mean_singlelag(precursor: xr.DataArray, lag: int):
+    """
+    Computes the mean over all points in the flattened (spatial) last dimension.
+    Should already be the subset for a single cluster / square / whatever
+    (Time aggregated) precursor is unlagged and lagged here.
+    Returned 1D with same time axis
+    """
+    meanprec = precursor.values.reshape((precursor.shape[0],-1)).mean(axis = -1)
+    logging.debug('computed unlagged mean')
+    meanprec = xr.DataArray(meanprec, dims = precursor.dims[:1], coords = {precursor.dims[0]:precursor.coords[precursor.dims[0]]}, name = 'mean') 
+    meanprec['time'] = meanprec['time'] - pd.Timedelta(str(lag) + 'D') # Ascribe each value to another timestamp (e.g. lag of -10 means precursor value of originally 1979-01-01 is assigned to 1979-01-11
+    logging.debug(f'lagged mean of ntimes: {len(meanprec)} with lag: {lag}')
+    return(meanprec.reindex_like(precursor))

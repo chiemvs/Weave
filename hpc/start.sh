@@ -17,7 +17,7 @@ python3 -m venv $TMPDIR/VENV
 source $TMPDIR/VENV/bin/activate
 pip install -r $REQUIREMENTS
 
-python3 $SCRIPT $TMPDIR $HOME $NPROC "${@:4}" # script, tmpstorage_on_the_node, packagedir (for loading the code), nprocesses, Array of directories (reading and writing results)
+python3 $SCRIPT $TMPDIR $HOME/Weave $NPROC "${@:4}" # script, tmpstorage_on_the_node, packagedir (for loading the code), nprocesses, Array of directories (reading and writing results)
 
 #rsync -av $TMPDIR/ $HOME --exclude VENV --exclude nodelist
 cp $TMPDIR/*.log $HOME

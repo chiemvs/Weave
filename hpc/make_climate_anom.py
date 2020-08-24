@@ -18,8 +18,8 @@ OUTDIR = Path(sys.argv[5])
 
 sys.path.append(PACKAGEDIR)
 
-from Weave.src.processing import ClimateComputer, AnomComputer, TimeAggregator
-from Weave.src.inputoutput import Writer 
+from Weave.processing import ClimateComputer, AnomComputer, TimeAggregator
+from Weave.inputoutput import Writer 
 
 if __name__ == '__main__':
     logging.basicConfig(filename= TMPDIR / 'make_climate_anom.log', filemode='w', level=logging.DEBUG, format='%(process)d-%(relativeCreated)d-%(message)s')
@@ -27,7 +27,7 @@ if __name__ == '__main__':
     # ERA5 variables present in the data directory
     files = [ f.parts[-1] for f in OBSDIR.glob('*.nc') if f.is_file()]
     
-    for inputfile in ['t850_nhblock.nc']:
+    for inputfile in ['z300_nhnorm.nc']:
         name = inputfile.split('.')[0]
         varname = name.split('_')[0]
         # Discover the group

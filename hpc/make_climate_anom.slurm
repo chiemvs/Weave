@@ -1,8 +1,8 @@
 #!/usr/bin/bash
 #SBATCH --job-name="clim"
-#SBATCH --nodelist=node242
+#SBATCH --nodelist=node240
 #SBATCH --cpus-per-task=32
-#SBATCH --time=00:50:00
+#SBATCH --time=03:50:00
 #SBATCH --partition=ivm
 #SBATCH --output=../../python_%j.out
 #SBATCH --error=../../python_%j.err

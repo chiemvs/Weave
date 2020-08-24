@@ -287,7 +287,7 @@ class Reader(object):
                     blockslice = slice(start,None,None)
                 else:
                     blockslice = slice(start,(start+self.blocksize),None)
-                block = presentset[self.ncvarname][blockslice,...][(slice(None),) + non_nans_ind].astype(dtype)
+                block = presentset[self.ncvarname][blockslice,...][(slice(None),) + non_nans_ind].astype(dtype) # Astype needed because ints need to be converted to floats to allow np.nan in memory for the masked places
                 # This block is either a masked array is returned or a regular numpy array when no missing values are found (Unfortunately only in netCDF4 version of 1.4+ we can regulate the behaviour of always returning a masked array)
                 # We only use the non_nans_ind on the numpy block, with a possible flattening as the result. netCDF4 cannot handle the tuples with arrays
                 # Therefore we convert

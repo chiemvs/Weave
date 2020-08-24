@@ -21,10 +21,10 @@ OUTDIR = Path(sys.argv[7])
 
 sys.path.append(PACKAGEDIR)
 
-from Weave.src.processing import TimeAggregator
-from Weave.src.inputoutput import Writer, Reader
-from Weave.src.utils import agg_time, get_europe, get_natlantic
-from Weave.src.dimreduction import spatcov_multilag
+from Weave.processing import TimeAggregator
+from Weave.inputoutput import Writer, Reader
+from Weave.utils import agg_time, get_europe, get_natlantic
+from Weave.dimreduction import spatcov_multilag
 
 logging.basicConfig(filename= TMPDIR / 'toy.log', filemode='w', level=logging.DEBUG, format='%(process)d-%(relativeCreated)d-%(message)s')
 # Open a response timeseries. And extract a certain cluster with a cluster template

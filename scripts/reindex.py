@@ -8,7 +8,7 @@ PACKAGEDIR = sys.argv[2]
 
 sys.path.append(PACKAGEDIR)
 
-from Weave.src.inputoutput import Writer, Reader
+from Weave.inputoutput import Writer, Reader
 
 example = xr.open_dataarray('/scistor/ivm/jsn295/processed/snowc_nhmin.anom.nc')[0]
 files = [ f for f in CORRDIR.glob('snowc_nhmin*.corr.nc') if f.is_file() ]

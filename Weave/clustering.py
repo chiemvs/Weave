@@ -24,7 +24,11 @@ from typing import Union, Callable, List
 from .utils import nanquantile, get_corresponding_ctype
 from sklearn.metrics import pairwise_distances
 from sklearn.cluster import DBSCAN
+from hdbscan import HDBSCAN
 from haversine import haversine_vector
+
+class MaskingError(Exception):
+    pass
 
 class Manipulator(object):
     """
@@ -58,6 +62,27 @@ class Manipulator(object):
         else:
             outarray[:] = self.array
         logging.info(f'{self} manipulator has written to {type(outarray)}')
+
+class Latlons(Manipulator):
+    """
+    Convenience manipulator to use haversine distance on the spatial coordinates of the array.
+    Needs decimal degrees. Does not use the actual array data at all
+    Will output a feature array of (2, nspace), where the rows are the features [latitude,longitude]
+    """
+    def __init__(self, to_radians: bool = False):
+        self.to_radians = to_radians
+
+    def get_outshape(self, inarray: xr.DataArray) -> tuple:
+        # The spatial dimension was flattened by reshaping
+        return (2,) + inarray.shape[-1:]
+    
+    def get_outnpdtype(self, inarray: xr.DataArray) -> type:
+        return np.dtype(inarray.coords['latitude'].dtype)
+
+    def manipulate(self, inarray: xr.DataArray) -> None:
+        self.array = np.vstack([inarray.coords['latitude'], inarray.coords['longitude']])
+        if self.to_radians:
+            self.array = np.radians(self.array)
 
 class Lagshift(Manipulator):
     """
@@ -124,7 +149,12 @@ class Clustering(object):
         return self
 
     def __exit__(self, type, value, traceback):
-        pass
+        """
+        Some cleanup of potentially huge attributes
+        """
+        for item in ['distmat','array']:
+            if hasattr(self, item):
+                delattr(self, item)
     
     def __repr__(self) -> str:
         return f'Clustering(varname = {self.varname}, groupname = {self.groupname}, varpath = {self.varpath})'
@@ -172,6 +202,8 @@ class Clustering(object):
                 mask = mask.stack(self.stackdim)
             logging.debug(f'{self} will mask out {(~mask).sum().values} of {self.array.shape[-1]} samples')
             self.array = self.array[:,mask.values]
+            if self.array.shape[-1] == 0: 
+                raise MaskingError('All samples have been masked out, cannot procede')
         
         # Capture the coords of data after masking.
         self.samplecoords = self.array.coords[self.array.dims[-1]]
@@ -181,7 +213,7 @@ class Clustering(object):
         Accepts a 2D array with (n_features, n_samples) or works on the one created by self.reshape_and_drop_obs
         A manipulator class can be supplied that will be initialized with (*args,**kwargs) and its manipulator.manipulate is called. This can enlarge the array and potentially create memory poblems
         Optionally it therefore places the final array on disk (memmapped) or in shared memory (requires ctypes)
-        where: 'memmap', 'shared'
+        where: 'memmap', 'shared' or None
         """
         if not array is None:
             self.array = array
@@ -280,7 +312,9 @@ class Clustering(object):
     
     def clustering(self, nclusters: List[int] = None, dissimheights: List[float] = None, clusterclass: Callable = None, args: tuple = tuple(), kwargs: dict = dict()) -> Union[xr.DataArray,np.ndarray]:
         """
-        Enables sklearn clustering algorithms like  DBSCAN to be called with precomputed matrices. Otherwise do the hierachal spatial clustering.
+        Enables sklearn clustering algorithms like  DBSCAN to be called with precomputed matrices. 
+        Enables HDBSCAN to be called on non-precomputed array
+        Otherwise do the hierachal spatial clustering.
         This scipy implementation can be called with nclusters or with dissimilarity heights at which to cut the tree (resulting in unknown numbers of clusters)
         Have a possibility to weight the samples?
         The function returns an int16 array with two dimensions (nclusters or ndissimheigts,n_samples)
@@ -298,28 +332,37 @@ class Clustering(object):
             except TypeError:
                 requestsize = 1
                 requestname = 'nclusters'
-                assert clusterclass == DBSCAN, 'You can only refrain from specifying nclusters and dissimheigts when using DBSCAN, which determines this by itself'
+                assert clusterclass in [DBSCAN, HDBSCAN], 'You can only refrain from specifying nclusters and dissimheigts when using (H)DBSCAN, which determines this by itself'
                 logging.debug(f'The amount of clusters will be determined by {clusterclass}.')
 
         returnarray = np.zeros((requestsize,self.manshape[-1]), dtype = np.int16)
-        if not clusterclass is None:
-            # The sklearn classes want a square distance matrix, and can only be called once per ncluster value
+        if clusterclass == DBSCAN:
+            # The sklearn classes want a square distance matrix, and can only be called once per ncluster value, for some large domains the squaring of the matrices gets too heavy on memory
             if not self.distmat.ndim == 2:
                 self.distmat = squareform(self.distmat)
-            if clusterclass == DBSCAN:
-                kwargs.update({'metric':'precomputed'})
+            kwargs.update({'metric':'precomputed'})
+            cl = clusterclass(*args, **kwargs)
+            logging.debug(f'Initialized the supplied sklearn clusterclass as {cl}')
+            cl.fit(self.distmat) # weigths? This can be huge on memory even though there was precomputation when a lot of cells are connected through each others eps regions
+            nclusters = [ sum(np.unique(cl.labels_) != -1) ]
+            returnarray[:,:] = cl.labels_
+        elif clusterclass == HDBSCAN:
+            # Big datasets, no precomputed metric, so no distmat present
+            cl = clusterclass(*args, **kwargs)
+            logging.debug(f'Initialized the supplied hdbscan clusterclass as {cl}')
+            cl.fit(self.array.T) # Needs (nsamples,nfeatures) 
+            nclusters = [ sum(np.unique(cl.labels_) != -1) ]
+            returnarray[:,:] = cl.labels_
+        elif clusterclass is not None:
+            # The other sklearn classes want a square distance matrix, and can only be called once per ncluster value, the api also slightly differs from DBSCAN (affinity instead of metric)
+            if not self.distmat.ndim == 2:
+                self.distmat = squareform(self.distmat)
+            for ncluster in nclusters:
+                kwargs.update({'n_clusters':ncluster, 'affinity':'precomputed'})
                 cl = clusterclass(*args, **kwargs)
                 logging.debug(f'Initialized the supplied sklearn clusterclass as {cl}')
                 cl.fit(self.distmat) # weigths?
-                nclusters = [ sum(np.unique(cl.labels_) != -1) ]
-                returnarray[:,:] = cl.labels_
-            else:
-                for ncluster in nclusters:
-                    kwargs.update({'n_clusters':ncluster, 'affinity':'precomputed'})
-                    cl = clusterclass(*args, **kwargs)
-                    logging.debug(f'Initialized the supplied sklearn clusterclass as {cl}')
-                    cl.fit(self.distmat) # weigths?
-                    returnarray[nclusters.index(ncluster),:] = cl.labels_
+                returnarray[nclusters.index(ncluster),:] = cl.labels_
         else:
             # We use the standard scipy hierarchal clustering, wants a condensed distance matix. Luckily squareform can also do the inverse
             if not self.distmat.ndim == 1:
