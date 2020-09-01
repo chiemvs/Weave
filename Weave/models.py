@@ -10,7 +10,6 @@ import itertools
 from typing import Callable
 from collections import OrderedDict
 from sklearn.model_selection import KFold
-from sklearn.ensemble import RandomForestRegressor
 from sklearn.metrics import mean_squared_error, r2_score, mean_absolute_error
 from PermutationImportance import sklearn_permutation_importance
 
@@ -117,7 +116,7 @@ def permute_importance(model: Callable, X_in, y_in, X_val = None, y_val = None, 
     perm_imp_kwargs are mainly computational arguments
     """
     if single_only:
-        perm_imp_kwargs.update(dict(n_important_vars = 1)) # Only one pass neccessary
+        perm_imp_kwargs['nimportant_vars'] = 1 # Only one pass neccessary
 
     # Use similar setup as fit_predict_evaluate, with an inner_func that is potentially called multiple times
     def inner_func(model, X_train, y_train, X_val: pd.DataFrame, y_val: pd.Series) -> pd.DataFrame:
@@ -146,6 +145,7 @@ def permute_importance(model: Callable, X_in, y_in, X_val = None, y_val = None, 
 
 if __name__ == '__main__':
     from scipy.signal import detrend
+    from sklearn.ensemble import RandomForestRegressor
     Y_path = '/nobackup_1/users/straaten/spatcov/response.multiagg.trended.parquet'
     X_path = '/nobackup_1/users/straaten/spatcov/precursor.multiagg.parquet'
     y = pd.read_parquet(Y_path).loc[:,(slice(None),5,slice(None))].iloc[:,0] # Only summer
