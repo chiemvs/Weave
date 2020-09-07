@@ -177,10 +177,12 @@ def get_forest_properties(forest: RandomForestRegressor, average: bool = True):
 
 if __name__ == '__main__':
     from scipy.signal import detrend
-    Y_path = '/nobackup_1/users/straaten/spatcov/response.multiagg.trended.parquet'
-    X_path = '/nobackup_1/users/straaten/spatcov/precursor.multiagg.parquet'
-    y = pd.read_parquet(Y_path).loc[:,(slice(None),1,slice(None))].iloc[:,0] # Only summer
-    X = pd.read_parquet(X_path).loc[y.index, (slice(None),slice(None),slice(None),-3)].dropna(axis = 0, how = 'any')
+    #Y_path = '/nobackup_1/users/straaten/spatcov/response.multiagg.trended.parquet'
+    #X_path = '/nobackup_1/users/straaten/spatcov/precursor.multiagg.parquet'
+    Y_path = '/scistor/ivm/jsn295/clustertest_roll_spearman_varalpha/response.multiagg.trended.parquet'
+    X_path = '/scistor/ivm/jsn295/clustertest_roll_spearman_varalpha/precursor.multiagg.parquet'
+    y = pd.read_parquet(Y_path).loc[:,(slice(None),3,slice(None))].iloc[:,0] # Only summer
+    X = pd.read_parquet(X_path).loc[y.index, (slice(None),slice(None),slice(None),0,slice(None),'spatcov')].dropna(axis = 0, how = 'any')
     y = y.reindex(X.index)
     y = pd.Series(detrend(y), index = y.index, name = y.name) # Also here you see that detrending improves Random forest performance a bit
 
@@ -194,10 +196,17 @@ if __name__ == '__main__':
     #r2 = RandomForestRegressor(max_depth = 500, n_estimators = 200, min_samples_split = 70, max_features = 0.3, n_jobs = 7)
     #test = fit_predict_evaluate(r2, X, y, properties_too = True)
     
-    hyperparams = dict(max_depth = [200,500], min_samples_split = [10,30,70,300])
+    #hyperparams = dict(max_depth = [200,500], min_samples_split = [10,30,70,300])
     #hyperparams = dict(min_impurity_decrease = [0.0,0.01,0.02,0.03])
-    other_kwds = dict(n_jobs = 7, max_features = 0.3, n_estimators = 200) 
+    #other_kwds = dict(n_jobs = 7, max_features = 0.3, n_estimators = 200) 
+    #ret = hyperparam_evaluation(RandomForestRegressor, X, y, hyperparams, other_kwds, properties_too = True)
+    
+    #hyperparams = dict(n_estimators = [50,100,200,500,750,1000,1250,1500])
+    hyperparams = dict(min_samples_split = [10,30,40,50,60,70], max_depth = [15,30,60])
+    #hyperparams = dict(min_impurity_decrease = [0.001,0.002,0.003,0.004,0.005,0.01])
+    other_kwds = dict(n_jobs = 20, n_estimators = 750, max_features = 0.3) 
     ret = hyperparam_evaluation(RandomForestRegressor, X, y, hyperparams, other_kwds, properties_too = True)
+    
     # Small min_samples_split? But difficult to see real trends in the hyperparams as generally not a very skillful situation in this small case study. Deeper than this max-depth seems better
     
     #m = RandomForestRegressor(max_depth = 40, min_samples_split = 50, n_jobs = 7 )
