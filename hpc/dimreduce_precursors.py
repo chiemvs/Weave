@@ -28,7 +28,7 @@ from Weave.inputoutput import Writer, Reader
 from Weave.utils import agg_time, Region
 from Weave.dimreduction import spatcov_multilag, mean_singlelag
 
-logging.basicConfig(filename= TMPDIR / 'dimreduce_precursors.log', filemode='w', level=logging.DEBUG, format='%(process)d-%(relativeCreated)d-%(message)s')
+logging.basicConfig(filename= TMPDIR / 'dimreduce_precursors_snowsea.log', filemode='w', level=logging.DEBUG, format='%(process)d-%(relativeCreated)d-%(message)s')
 firstday = pd.Timestamp('1981-01-01')
 responseclustid = 9
 timeaggs = [1, 3, 5, 7, 11, 15, 21, 31] 
@@ -61,7 +61,11 @@ else:
     logging.debug(f'previously existing file found at {response_output}, do nothing')
 
 # Only rolling aggregation is possible for intercomparing timescales, as those are equally (daily) stamped
-files = [ f for f in PATTERNDIR.glob('*corr.nc') if (f.is_file() and not (f.name[:4] in ['sico','snow']))]
+do = 'snowsea' # 'other'  
+if do == 'other':
+    files = [ f for f in PATTERNDIR.glob('*corr.nc') if (f.is_file() and not (f.name[:4] in ['sico','snow']))]
+else:
+    files = [ f for f in PATTERNDIR.glob('*corr.nc') if (f.is_file() and (f.name[:4] in ['sico','snow']))]
 #files = [ f for f in PATTERNDIR.glob('*nhmin*corr.nc') if f.is_file()]
 #files = [Path('/scistor/ivm/jsn295/clustertest_roll_spearman_varalpha/snowc_nhmin.31.corr.nc')]
 to_reduce = ['snowc_nhmin','siconc_nhmin'] # Variables with huge files and remote clusters. Are handled differently (not stacked, but aggregated per cluster per lag)
@@ -127,7 +131,7 @@ for inputpath in files:
                         in_this_cluster = in_this_cluster[in_this_cluster] 
                         subdomain = Region('subdomain', float(in_this_cluster.latitude.max()), float(in_this_cluster.longitude.min()), float(in_this_cluster.latitude.min()), float(in_this_cluster.longitude.max())) 
                         logging.debug(f'established subdomain for cluster {clustid} for lag {lag}')
-                        ta = TimeAggregator(datapath = anompath, share_input = True, reduce_input = False, region = subdomain) # We are going to do a full aggregation once, to cover all lags and clustids
+                        ta = TimeAggregator(datapath = anompath, share_input = True, reduce_input = False, reduce_dtype = True, region = subdomain) # We are going to do a full aggregation once, to cover all lags and clustids
                         mean = ta.compute(nprocs = NPROC, ndayagg = int(timeagg), method = 'mean', firstday = firstday, rolling = True)
                         del ta
                         mean = mean[np.logical_or(mean.time.dt.season == 'MAM',mean.time.dt.season == 'JJA'),...] # Throw away some values to reduce memoty cost of grouping but still keeping the ability to lag into previous season.
@@ -147,6 +151,5 @@ for inputpath in files:
     logging.info('on to next variable/timeagg')
 
 final = pd.concat(outcomes, axis = 1, join = 'outer')
-outpath = OUTDIR / '.'.join(['precursor','multiagg','parquet']) 
-#outpath = OUTDIR / '.'.join(['precursor','snowsea','multiagg','parquet']) 
+outpath = OUTDIR / '.'.join(['precursor',do,'multiagg','parquet']) 
 pq.write_table(pa.Table.from_pandas(final), outpath)

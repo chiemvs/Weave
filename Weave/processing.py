@@ -99,7 +99,7 @@ class Computer(object):
     Super class that provides a common initialization for computers that need acces to an on disk netcdf array, extract coordinate information from them and prepare the array as numpy in (shared) memory for sub-processes to access it.
     Assumes that the time dimension is the zero-th dimension
     """
-    def __init__(self, datapath: Path = None, group: str = None, ncvarname: str = None, share_input: bool = True, reduce_input: bool = False, region: Region = None, data: xr.DataArray = None):
+    def __init__(self, datapath: Path = None, group: str = None, ncvarname: str = None, share_input: bool = True, reduce_input: bool = False, reduce_dtype: bool = False, region: Region = None, data: xr.DataArray = None):
         """
         Opening data with xarray has not the ability to read with less precision
         Therefore we standard use the custom reader, to which a precision can be supplied.
@@ -109,7 +109,7 @@ class Computer(object):
         """
         if data is None:
             data = Reader(datapath = datapath, ncvarname = ncvarname, groupname = group, region = region)# This object has similar attributes as an xr.DataArray, only no values, these are returned upon reading, with desired precision
-            self.inarray = data.read(into_shared = share_input, dtype = np.float16 if reduce_input else np.float32, flatten = reduce_input) 
+            self.inarray = data.read(into_shared = share_input, dtype = np.float16 if (reduce_input or reduce_dtype) else np.float32, flatten = reduce_input) 
         else:
             if share_input:
                 self.inarray = mp.RawArray(get_corresponding_ctype(data.dtype), size_or_initializer=data.size)
@@ -210,8 +210,8 @@ class TimeAggregator(Computer):
     For non-rolling aggregation it is possible to supply a first day
     This allows a full overlap with another block-aggregated time series
     """
-    def __init__(self, datapath: Path, group: str = None, ncvarname: str = None, share_input: bool = False, reduce_input: bool = False, region: Region = None):
-        Computer.__init__(self, datapath = datapath, group = group, ncvarname = ncvarname, share_input = share_input, reduce_input = reduce_input, region = region)
+    def __init__(self, datapath: Path, group: str = None, ncvarname: str = None, share_input: bool = False, reduce_input: bool = False, reduce_dtype: bool = False, region: Region = None):
+        Computer.__init__(self, datapath = datapath, group = group, ncvarname = ncvarname, share_input = share_input, reduce_input = reduce_input, reduce_dtype = reduce_dtype, region = region)
         assert (np.diff(self.coords['time']) == np.timedelta64(1,'D')).all(), "Time axis should be continuous daily to be allegible for aggregation"
         # Preparing and sharing the output
         self.outarray = mp.RawArray(get_corresponding_ctype(self.dtype), size_or_initializer=self.size)

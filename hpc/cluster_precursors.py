@@ -22,10 +22,11 @@ sys.path.append(PACKAGEDIR)
 from Weave.inputoutput import Writer, Reader
 from Weave.clustering import Clustering, haversine_worker, Latlons, MaskingError
 
-logging.basicConfig(filename= TMPDIR / 'cluster_precursors3.log', filemode='w', level=logging.DEBUG, format='%(process)d-%(relativeCreated)d-%(message)s')
+logging.basicConfig(filename= TMPDIR / 'cluster_precursors.log', filemode='w', level=logging.DEBUG, format='%(process)d-%(relativeCreated)d-%(message)s')
 
 # Clusterkwargs for hdbscan, coming from manual selection
 #hdbscan_kwargs = pd.DataFrame([[2000,600],[5000,2000],[True,False]], columns = ['z300','standard'], index = ['min_samples','min_cluster_size','allow_single_cluster'])
+#hdbscan_kwargs = pd.DataFrame([[2000,2000,600,1500,600,2000],[5000,7000,2000,2500,2000,5000],[True,True,True,False,False,False]], columns = ['t850','z300','tcc','sst','standard','snowc'], index = ['min_samples','min_cluster_size','allow_single_cluster']) # attempt4
 hdbscan_kwargs = pd.DataFrame([[2000,2000,600,2000,600,2000],[5000,7000,2000,2500,2000,5000],[True,True,True,False,False,False]], columns = ['t850','z300','tcc','sst','standard','snowc'], index = ['min_samples','min_cluster_size','allow_single_cluster']) # attempt3
 #hdbscan_kwargs = pd.DataFrame([[2000,2000,600,1000,600,1500],[5000,7000,2000,3000,2000,4000],[True,True,True,False,False,False]], columns = ['t850','z300','tcc','sst','standard','snowc'], index = ['min_samples','min_cluster_size','allow_single_cluster']) # attempt2
 #hdbscan_kwargs = pd.DataFrame([[2000,2000,600,1000,600,1500],[6000,6000,2000,2000,2000,2000],[True,True,True,False,False,False]], columns = ['t850','z300','tcc','sst','standard','snowc'], index = ['min_samples','min_cluster_size','allow_single_cluster']) # attempt1
