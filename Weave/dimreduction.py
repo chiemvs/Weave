@@ -15,8 +15,8 @@ def spatcov_multilag(pattern: xr.DataArray, precursor: xr.DataArray, laglist: li
     then lags each of the timeseries by the appropriate lag. 
     """
     # Flatten the spatial dimensions
-    flatpat = pattern.values.reshape((pattern.shape[0],-1))
-    flatprec = precursor.values.reshape((precursor.shape[0],-1))
+    flatpat = pattern.values.reshape((pattern.shape[0],-1)).astype(np.float32)
+    flatprec = precursor.values.reshape((precursor.shape[0],-1)).astype(np.float32)
 
     patterndiff = flatpat - np.nanmean(flatpat, -1)[:,np.newaxis] # 2D, (nlags,nspace)
     precursordiff = flatprec - np.nanmean(flatprec, -1)[:,np.newaxis] # 2D (ntime,nspace)
@@ -47,7 +47,7 @@ def mean_singlelag(precursor: xr.DataArray, lag: int):
     (Time aggregated) precursor is unlagged and lagged here.
     Returned 1D with same time axis
     """
-    meanprec = precursor.values.reshape((precursor.shape[0],-1)).mean(axis = -1)
+    meanprec = np.nanmean(precursor.values.reshape((precursor.shape[0],-1)).astype(np.float32), axis = -1)
     logging.debug('computed unlagged mean')
     meanprec = xr.DataArray(meanprec, dims = precursor.dims[:1], coords = {precursor.dims[0]:precursor.coords[precursor.dims[0]]}, name = 'mean') 
     meanprec['time'] = meanprec['time'] - pd.Timedelta(str(lag) + 'D') # Ascribe each value to another timestamp (e.g. lag of -10 means precursor value of originally 1979-01-01 is assigned to 1979-01-11
