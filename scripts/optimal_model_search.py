@@ -1,5 +1,5 @@
 """
-called as optimal_model_search.py $TMPDIR $PACKAGEDIR $NPROC $OUTDIR
+called as optimal_model_search.py $TMPDIR $PACKAGEDIR $NPROC $PATTERNDIR $OUTDIR
 """
 import sys
 import itertools
@@ -17,7 +17,8 @@ from multiprocessing import Pool
 TMPDIR = Path(sys.argv[1])
 PACKAGEDIR = sys.argv[2] 
 NPROC = int(sys.argv[3])
-OUTDIR = Path(sys.argv[4])
+PATTERNDIR = Path(sys.argv[4])
+OUTDIR = Path(sys.argv[5])
 
 sys.path.append(PACKAGEDIR)
 from Weave.models import hyperparam_evaluation, permute_importance
@@ -25,10 +26,11 @@ from Weave.models import hyperparam_evaluation, permute_importance
 logging.basicConfig(filename= TMPDIR / 'importance.log', filemode='w', level=logging.DEBUG, format='%(process)d-%(relativeCreated)d-%(message)s')
 
 # Merging the snow and other dimreduced timeseries
-path_other = Path('/scistor/ivm/jsn295/clustertest_roll_spearman_varalpha/precursor.other.multiagg.parquet')
-path_snow = Path('/scistor/ivm/jsn295/clustertest_roll_spearman_varalpha/precursor.snowsea.multiagg.parquet')
-path_complete = Path('/scistor/ivm/jsn295/clustertest_roll_spearman_varalpha/precursor.multiagg.parquet')
-path_y = Path('/scistor/ivm/jsn295/clustertest_roll_spearman_varalpha/response.multiagg.trended.parquet')
+# PATTERNDIR = Path('/scistor/ivm/jsn295/clusterpar3_roll_spearman_varalpha/') #Path('/scistor/ivm/jsn295/clustertest_roll_spearman_varalpha/')
+path_other = PATTERNDIR / 'precursor.other.multiagg.parquet'
+path_snow = PATTERNDIR / 'precursor.snowsea.multiagg.parquet'
+path_complete = PATTERNDIR / 'precursor.multiagg.parquet'
+path_y = PATTERNDIR / 'response.multiagg.trended.parquet'
 
 if not path_complete.exists(): 
     other = pq.read_table(path_other).to_pandas() # Not working yet
@@ -43,7 +45,7 @@ def read_data(responseagg = 3, separation = -7, detrend_y = True):
     A dataframe and a Series
     """
     y = pd.read_parquet(path_y).loc[:,(slice(None),responseagg,slice(None))].iloc[:,0] # Only summer
-    X = pd.read_parquet(path_complete).loc[y.index,(slice(None),slice(None),slice(None),separation)].dropna(axis = 0, how = 'any')
+    X = pd.read_parquet(path_complete).loc[y.index,(slice(None),slice(None),slice(None),separation,slice(None),'spatcov')].dropna(axis = 0, how = 'any')
     y = y.reindex(X.index)
     if detrend_y:
         y = pd.Series(detrend(y), index = y.index, name = y.name) # Also here you see that detrending improves Random forest performance a bit
@@ -82,7 +84,7 @@ def execute_perm_imp(respseptup):
     retpath = OUTDIR / str(responseagg) / str(separation)
     if not retpath.exists():
         X,y = read_data(responseagg = responseagg, separation = separation)
-        m = RandomForestRegressor(max_depth = 500, n_estimators = 200, min_samples_split = 70, max_features = 0.3, n_jobs = njobs_per_imp)
+        m = RandomForestRegressor(max_depth = 20, n_estimators = 1500, min_samples_split = 35, max_features = 0.2, n_jobs = njobs_per_imp)
         ret = permute_importance(m, X_in = X, y_in = y, perm_imp_kwargs = dict(nimportant_vars = 8, njobs = njobs_per_imp, nbootstrap = 500))
         retpath.mkdir(parents = True)
         pq.write_table(pa.Table.from_pandas(ret), retpath / 'responsagg_separation.parquet')

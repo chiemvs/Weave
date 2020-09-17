@@ -10,8 +10,8 @@ import itertools
 from typing import Callable
 from collections import OrderedDict
 from sklearn.model_selection import KFold
-from sklearn.metrics import mean_squared_error, r2_score, mean_absolute_error
-from sklearn.ensemble import RandomForestRegressor
+from sklearn.metrics import mean_squared_error, r2_score, mean_absolute_error, brier_score_loss, log_loss
+from sklearn.ensemble import RandomForestRegressor, RandomForestClassifier
 from PermutationImportance import sklearn_permutation_importance
 
 
@@ -20,7 +20,7 @@ def evaluate(y_true, y_pred, scores = [r2_score, mean_squared_error, mean_absolu
     Calls scores one by one a set of predictions and true values
     scores should be functions that accept (y_true,y_pred) and return a float
     default are determinisic regression scores
-    supply others for classification and/or probabilistic prediction 
+    supply others for classification and/or probabilistic prediction like [brier_score,log_likelyhood,reliability] 
     """
     assert y_true.size == y_pred.size, "True values and predicted values should be array-like and have the same size"
     assert (len(y_true.shape) == 1) and (len(y_pred.shape) == 1), "True values and predicted values should be array-like and 1D"
@@ -64,7 +64,7 @@ def crossvalidate(n_folds: int = 10) -> Callable:
         return wrapper
     return actual_decorator
 
-def fit_predict_evaluate(model: Callable, X_in, y_in, X_val = None, y_val = None, n_folds = 10, properties_too: bool = False) -> pd.Series:
+def fit_predict_evaluate(model: Callable, X_in, y_in, X_val = None, y_val = None, n_folds = 10, compare_val_train: bool = True, properties_too: bool = False, evaluate_kwds: dict = dict()) -> pd.Series:
     """
     Calls the fitting and predict method of the already initialized model 
     If X_val and y_val are not supplied then it is assumed that X_in and y_in comprise both training and validation data
@@ -73,18 +73,29 @@ def fit_predict_evaluate(model: Callable, X_in, y_in, X_val = None, y_val = None
     Has the option to not only evaluate the predictions, but to also extract forest properties if the model is a forest
     """
     if properties_too:
-        assert isinstance(model, RandomForestRegressor), 'extracting properties works only with forest models'
+        assert isinstance(model, (RandomForestRegressor,RandomForestClassifier)), 'extracting properties works only with forest models'
+    if isinstance(model, RandomForestClassifier): # Renaming of the methods, such that the preferred one for the classifier is a probabilistic prediction
+        def wrapper(*args, **kwargs):
+            return model.predict_proba(*args,**kwargs)[:,-1] # Last class is True
+        model.predfunc = wrapper
+    else:
+        model.predfunc = model.predict
+
     def inner_func(model, X_train, y_train, X_val, y_val) -> pd.Series:
         model.fit(X = X_train, y=y_train)
-        preds = model.predict(X = X_val)
-        scores = evaluate(y_true = y_val, y_pred = preds)
-        if not properties_too:
-            return scores 
-        else:
+        preds = model.predfunc(X = X_val)
+        scores = evaluate(y_true = y_val, y_pred = preds, **evaluate_kwds) # Unseen data
+        if compare_val_train:
+            preds_train = model.predfunc(X = X_train)
+            scores_train = evaluate(y_true = y_train, y_pred = preds_train, **evaluate_kwds) # Seen data
+            scores_valtrain = scores / scores_train # The difference between the two is informative
+            scores_valtrain.index = pd.Index([f'{score}_val/train' for score in scores_valtrain.index], name = scores_valtrain.index.name)
+            scores = pd.concat([scores,scores_valtrain])
+        if properties_too:
             properties = get_forest_properties(model, average = True)
-            combined = pd.concat([scores, properties])
-            combined.index.name = scores.index.name # Not completely accurate that a property is a score, but makes grouping over cross-validation folds later on easier
-            return combined 
+            properties.index.name = scores.index.name # Not completely accurate that a property is a score, but makes grouping over cross-validation folds later on easier
+            scores = pd.concat([scores, properties])
+        return scores
 
     if (X_val is None) or (y_val is None):
         f = crossvalidate(n_folds = n_folds)(inner_func)
@@ -92,7 +103,7 @@ def fit_predict_evaluate(model: Callable, X_in, y_in, X_val = None, y_val = None
     else:
         return inner_func(model = model, X_train = X_in, y_train = y_in, X_val = X_val, y_val = y_val)
 
-def hyperparam_evaluation(model: Callable, X_in, y_in, hyperparams: dict, other_kwds: dict = dict(), properties_too: bool = False) -> pd.DataFrame:
+def hyperparam_evaluation(model: Callable, X_in, y_in, hyperparams: dict, other_kwds: dict = dict(), fit_predict_kwds: dict = dict()) -> pd.DataFrame:
     """
     Model agnostic function for exploring sets of hyperparameters
     Initializes and trains the supplied model class k-times for each combination 
@@ -111,7 +122,7 @@ def hyperparam_evaluation(model: Callable, X_in, y_in, hyperparams: dict, other_
         paramcomb = dict(zip(hyperparams.keys(),paramcomb)) # Give back keys
         paramcomb.update(other_kwds) # Complement with non-varying parameters
         mod = model(**paramcomb)
-        outcomes.append(fit_predict_evaluate(mod, X_in = X_in, y_in = y_in, n_folds = 10, properties_too = properties_too)) # Always cross validation
+        outcomes.append(fit_predict_evaluate(mod, X_in = X_in, y_in = y_in, **fit_predict_kwds)) # Always cross validation
 
     full = pd.concat(outcomes, axis = 1, keys = pd.MultiIndex.from_tuples(keys))
     full.columns.names = list(keynames)
@@ -161,13 +172,14 @@ def get_forest_properties(forest: RandomForestRegressor, average: bool = True):
     flatness is derived by the ratio of the actual amount of n_leaves over n_leaves_for_a_flat_tree_of_that_max_depth (2**maxdepth) (actual leaves usually less when branching of mostly in one direction).
     """
     properties = ['max_depth','node_count','n_leaves']
-    derived_property = ['flatness']
+    #derived_property = ['flatness']
+    derived_property = []
     counts = np.zeros((forest.n_estimators, len(properties + derived_property)), dtype = np.int64)
     for i, tree in enumerate(forest.estimators_):
         counts[i,:len(properties)] = [getattr(tree.tree_, name) for name in properties]
     
     # Derive the other
-    counts[:,-1] = counts[:,properties.index('n_leaves')] / 2**counts[:,properties.index('max_depth')]
+    #counts[:,-1] = counts[:,properties.index('n_leaves')] / 2**counts[:,properties.index('max_depth')]
 
     if not average:
         return pd.DataFrame(counts, index = pd.RangeIndex(forest.n_estimators, name = 'tree'), columns = properties + derived_property)
@@ -179,39 +191,27 @@ if __name__ == '__main__':
     from scipy.signal import detrend
     #Y_path = '/nobackup_1/users/straaten/spatcov/response.multiagg.trended.parquet'
     #X_path = '/nobackup_1/users/straaten/spatcov/precursor.multiagg.parquet'
-    Y_path = '/scistor/ivm/jsn295/clustertest_roll_spearman_varalpha/response.multiagg.trended.parquet'
-    X_path = '/scistor/ivm/jsn295/clustertest_roll_spearman_varalpha/precursor.multiagg.parquet'
-    y = pd.read_parquet(Y_path).loc[:,(slice(None),3,slice(None))].iloc[:,0] # Only summer
-    X = pd.read_parquet(X_path).loc[y.index, (slice(None),slice(None),slice(None),0,slice(None),'spatcov')].dropna(axis = 0, how = 'any')
-    y = y.reindex(X.index)
-    y = pd.Series(detrend(y), index = y.index, name = y.name) # Also here you see that detrending improves Random forest performance a bit
+    #Y_path = '/scistor/ivm/jsn295/clustertest_roll_spearman_varalpha/response.multiagg.trended.parquet'
+    #X_path = '/scistor/ivm/jsn295/clustertest_roll_spearman_varalpha/precursor.multiagg.parquet'
+    #Y_path = '/scistor/ivm/jsn295/clusterpar3_roll_spearman_varalpha/response.multiagg.trended.parquet'
+    #X_path = '/scistor/ivm/jsn295/clusterpar3_roll_spearman_varalpha/precursor.multiagg.parquet'
+    #y = pd.read_parquet(Y_path).loc[:,(slice(None),7,slice(None))].iloc[:,0] # Only summer
+    #X = pd.read_parquet(X_path).loc[y.index, (slice(None),slice(None),slice(None),-7,slice(None),'spatcov')].dropna(axis = 0, how = 'any')
+    #y = y.reindex(X.index)
+    #y = pd.Series(detrend(y), index = y.index, name = y.name) # Also here you see that detrending improves Random forest performance a bit
 
-    #r = RandomForestRegressor(max_depth = 500, n_estimators = 200, min_samples_split = 70, max_features = 0.3, n_jobs = 7)
-    #ret_full = fit_predict_evaluate(model = r, X_in = X, y_in = y)
-    #ret_slim = fit_predict_evaluate(model = r, X_in = X.iloc[:,X.columns.get_level_values('metric') == 'spatcov'], y_in = y)
-    #ret_small = fit_predict_evaluate(model = r, X_in = X.sort_index(axis = 1).loc[:,(slice(None),slice(0,7),slice(None),slice(None),slice(None),'spatcov')], y_in = y)
-    #ret_tiny = fit_predict_evaluate(model = r, X_in = X.sort_index(axis = 1).loc[:,(slice(None),slice(0,3),slice(None),slice(None),slice(None),'spatcov')], y_in = y)
-
-    # Tree composition extraction test
-    #r2 = RandomForestRegressor(max_depth = 500, n_estimators = 200, min_samples_split = 70, max_features = 0.3, n_jobs = 7)
-    #test = fit_predict_evaluate(r2, X, y, properties_too = True)
+    # Testing a classifier
+    #y = y > y.quantile(0.9)
+    #r2 = RandomForestClassifier(max_depth = 20, n_estimators = 750, min_samples_split = 50, max_features = 0.3, n_jobs = 7, class_weight = 'balanced') # Balanced class weight helps a lot.
+    #test = fit_predict_evaluate(r2, X.iloc[:2000,:], y.iloc[:2000],X.iloc[2000:,:], y.iloc[2000:], properties_too = True, evaluate_kwds = dict(scores = [brier_score_loss,log_loss], score_names = ['bs','ll']))
     
-    #hyperparams = dict(max_depth = [200,500], min_samples_split = [10,30,70,300])
-    #hyperparams = dict(min_impurity_decrease = [0.0,0.01,0.02,0.03])
-    #other_kwds = dict(n_jobs = 7, max_features = 0.3, n_estimators = 200) 
-    #ret = hyperparam_evaluation(RandomForestRegressor, X, y, hyperparams, other_kwds, properties_too = True)
-    
-    #hyperparams = dict(n_estimators = [50,100,200,500,750,1000,1250,1500])
-    hyperparams = dict(min_samples_split = [10,30,40,50,60,70], max_depth = [15,30,60])
-    #hyperparams = dict(min_impurity_decrease = [0.001,0.002,0.003,0.004,0.005,0.01])
-    other_kwds = dict(n_jobs = 20, n_estimators = 750, max_features = 0.3) 
-    ret = hyperparam_evaluation(RandomForestRegressor, X, y, hyperparams, other_kwds, properties_too = True)
-    
-    # Small min_samples_split? But difficult to see real trends in the hyperparams as generally not a very skillful situation in this small case study. Deeper than this max-depth seems better
+    #hyperparams = dict(min_samples_split = [30,35], max_depth = [15,17,20,23])
+    #hyperparams = dict(min_samples_split = [30,35,40], max_depth = [15,20,25])
+    #hyperparams = dict(min_impurity_decrease = [0.001,0.002,0.003,0.005,0.01])
+    #hyperparams = dict(max_features = [0.05,0.1,0.15,0.2,0.25])
+    #other_kwds = dict(n_jobs = 20, n_estimators = 1000, max_features = 0.2) 
+    #other_kwds = dict(n_jobs = 20, n_estimators = 750, min_samples_split = 50, max_depth = 30)
+    #ret = hyperparam_evaluation(RandomForestRegressor, X, y, hyperparams, other_kwds,  fit_predict_kwds = dict(properties_too = True))
     
     #m = RandomForestRegressor(max_depth = 40, min_samples_split = 50, n_jobs = 7 )
     #ret = permute_importance(m, X_in = X, y_in = y, perm_imp_kwargs = dict(nimportant_vars = 8, njobs = 7, nbootstrap = 200))
-    ## Select most important variables has become easy, but quite variabe over all folds
-    #ret.loc[ret.loc[:,('multipass','rank')] == 0,:]
-    ## Mean ranks / scores over all folds:
-    #meanimp = ret.groupby(['variable','timeagg','lag','separation','clustid','metric']).mean()
