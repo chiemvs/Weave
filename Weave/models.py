@@ -6,6 +6,7 @@ Fitting, optimization, interpretation
 import numpy as np
 import pandas as pd
 import itertools
+import logging
 
 from typing import Callable
 from collections import OrderedDict
@@ -13,7 +14,6 @@ from sklearn.model_selection import KFold
 from sklearn.metrics import mean_squared_error, r2_score, mean_absolute_error, brier_score_loss, log_loss
 from sklearn.ensemble import RandomForestRegressor, RandomForestClassifier
 from PermutationImportance import sklearn_permutation_importance
-
 
 def evaluate(y_true, y_pred, scores = [r2_score, mean_squared_error, mean_absolute_error], score_names = ['r2','mse','mae']) -> pd.Series:
     """
@@ -64,7 +64,31 @@ def crossvalidate(n_folds: int = 10) -> Callable:
         return wrapper
     return actual_decorator
 
-def fit_predict_evaluate(model: Callable, X_in, y_in, X_val = None, y_val = None, n_folds = 10, compare_val_train: bool = True, properties_too: bool = False, evaluate_kwds: dict = dict()) -> pd.Series:
+def balance_training_data(how: str, X_train, y_train):
+    """
+    Balancing of a two-class (binarity) clasification problem
+    The true class is assumed to be the minority. A 50/50 ratio can be obtained by
+    i) oversampling the Trues, ii) undersampling the Falses
+    (Only training data should be balanced, otherwise biased scoring)
+    """
+    assert y_train.dtype == np.bool, "two type boolean class is needed for balancing training data, n_True < n_False"
+    if how == 'oversample': # Assumes that number of true is in the minority. Oversampling the Trues
+        true_picks = np.random.choice(a = np.where(y_train == True)[0], size = np.sum(y_train == False), replace = True)
+        false_true_picks = np.concatenate([np.where(y_train == False)[0], true_picks])
+    elif how == 'undersample': # Assumers that the number of true is the minority. Undersampling the Falses
+        assert y_train.dtype == np.bool, "two type boolean class is needed for balancing training data, n_True < n_False"
+        false_picks = np.random.choice(a = np.where(y_train == False)[0], size = np.sum(y_train == True), replace = False)
+        false_true_picks = np.concatenate([false_picks, np.where(y_train == True)[0]])
+    else:
+        raise ValueError("balance_training how argument should be one of ['oversample','undersample']")
+    logging.debug(f'training set has been balanced with {how} from {len(y_train)} to {len(false_true_picks)}')
+    print(f'training set has been balanced with {how} from {len(y_train)} to {len(false_true_picks)}')
+    try:
+        return X_train.iloc[false_true_picks,:], y_train.iloc[false_true_picks]
+    except AttributeError: # Not pandas objects but numpy arrays
+        return X_train[false_true_picks,:], y_train[false_true_picks]
+
+def fit_predict_evaluate(model: Callable, X_in, y_in, X_val = None, y_val = None, n_folds = 10, balance_training: str = None, compare_val_train: bool = True, properties_too: bool = False, evaluate_kwds: dict = dict()) -> pd.Series:
     """
     Calls the fitting and predict method of the already initialized model 
     If X_val and y_val are not supplied then it is assumed that X_in and y_in comprise both training and validation data
@@ -82,6 +106,8 @@ def fit_predict_evaluate(model: Callable, X_in, y_in, X_val = None, y_val = None
         model.predfunc = model.predict
 
     def inner_func(model, X_train, y_train, X_val, y_val) -> pd.Series:
+        if not balance_training is None:
+            X_train, y_train = balance_training_data(how = balance_training, X_train = X_train, y_train = y_train)
         model.fit(X = X_train, y=y_train)
         preds = model.predfunc(X = X_val)
         scores = evaluate(y_true = y_val, y_pred = preds, **evaluate_kwds) # Unseen data
@@ -103,7 +129,33 @@ def fit_predict_evaluate(model: Callable, X_in, y_in, X_val = None, y_val = None
     else:
         return inner_func(model = model, X_train = X_in, y_train = y_in, X_val = X_val, y_val = y_val)
 
-def hyperparam_evaluation(model: Callable, X_in, y_in, hyperparams: dict, other_kwds: dict = dict(), fit_predict_kwds: dict = dict()) -> pd.DataFrame:
+def fit_predict(model: Callable, X_in, y_in, X_val = None, y_val = None, n_folds = 10, balance_training: str = None):
+    """
+    Similar to fit_predict_evaluate, but only designed to make predictions for validation
+    Within cv-mode this can give you a full set of predictions on which (in total) you can call an evaluation function,
+    discarding the folds.
+    """
+    if isinstance(model, RandomForestClassifier): # Renaming of the methods, such that the preferred one for the classifier is a probabilistic prediction
+        def wrapper(*args, **kwargs):
+            return model.predict_proba(*args,**kwargs)[:,-1] # Last class is True
+        model.predfunc = wrapper
+    else:
+        model.predfunc = model.predict
+
+    def inner_func(model, X_train, y_train, X_val, y_val) -> pd.Series:
+        if not balance_training is None:
+            X_train, y_train = balance_training_data(how = balance_training, X_train = X_train, y_train = y_train)
+        model.fit(X = X_train, y=y_train)
+        preds = model.predfunc(X = X_val)
+        return pd.Series(preds, index = y_val.index)
+
+    if (X_val is None) or (y_val is None):
+        f = crossvalidate(n_folds = n_folds)(inner_func)
+        return f(model, X_in, y_in) # Conversion of arguments from X_in/y_in to X_train/y_train and X_val/y_val happens inside the decorating wrapper function
+    else:
+        return inner_func(model = model, X_train = X_in, y_train = y_in, X_val = X_val, y_val = y_val)
+
+def hyperparam_evaluation(model: Callable, X_in, y_in, hyperparams: dict, other_kwds: dict = dict(), fit_predict_kwds: dict = dict(), fit_predict_evaluate_kwds: dict = dict()) -> pd.DataFrame:
     """
     Model agnostic function for exploring sets of hyperparameters
     Initializes and trains the supplied model class k-times for each combination 
@@ -122,7 +174,10 @@ def hyperparam_evaluation(model: Callable, X_in, y_in, hyperparams: dict, other_
         paramcomb = dict(zip(hyperparams.keys(),paramcomb)) # Give back keys
         paramcomb.update(other_kwds) # Complement with non-varying parameters
         mod = model(**paramcomb)
-        outcomes.append(fit_predict_evaluate(mod, X_in = X_in, y_in = y_in, **fit_predict_kwds)) # Always cross validation
+        if fit_predict_evaluate_kwds:
+            outcomes.append(fit_predict_evaluate(mod, X_in = X_in, y_in = y_in, **fit_predict_evaluate_kwds)) # Always cross validation
+        else:
+            outcomes.append(fit_predict(mod, X_in = X_in, y_in = y_in, **fit_predict_kwds)) # Always cross validation
 
     full = pd.concat(outcomes, axis = 1, keys = pd.MultiIndex.from_tuples(keys))
     full.columns.names = list(keynames)
@@ -199,6 +254,7 @@ if __name__ == '__main__':
     #X = pd.read_parquet(X_path).loc[y.index, (slice(None),slice(None),slice(None),-7,slice(None),'spatcov')].dropna(axis = 0, how = 'any')
     #y = y.reindex(X.index)
     #y = pd.Series(detrend(y), index = y.index, name = y.name) # Also here you see that detrending improves Random forest performance a bit
+    #y = y > y.quantile(0.9)
 
     # Testing a classifier
     #y = y > y.quantile(0.9)
@@ -211,7 +267,10 @@ if __name__ == '__main__':
     #hyperparams = dict(max_features = [0.05,0.1,0.15,0.2,0.25])
     #other_kwds = dict(n_jobs = 20, n_estimators = 1000, max_features = 0.2) 
     #other_kwds = dict(n_jobs = 20, n_estimators = 750, min_samples_split = 50, max_depth = 30)
-    #ret = hyperparam_evaluation(RandomForestRegressor, X, y, hyperparams, other_kwds,  fit_predict_kwds = dict(properties_too = True))
+    #ret = hyperparam_evaluation(RandomForestRegressor, X, y, hyperparams, other_kwds,  fit_predict_evaluate_kwds = dict(properties_too = True))
     
-    #m = RandomForestRegressor(max_depth = 40, min_samples_split = 50, n_jobs = 7 )
-    #ret = permute_importance(m, X_in = X, y_in = y, perm_imp_kwargs = dict(nimportant_vars = 8, njobs = 7, nbootstrap = 200))
+    #def wrapper(self, *args, **kwargs):
+    #    return self.predict_proba(*args,**kwargs)[:,-1] # Last class is True
+    #RandomForestClassifier.predict = wrapper # To avoid things inside permutation importance package  
+    #m = RandomForestClassifier(max_depth = 5, min_samples_split = 20, n_jobs = 20, max_features = 0.15,n_estimators = 2)
+    #ret = permute_importance(m, X_in = X, y_in = y, evaluation_fn = brier_score_loss, perm_imp_kwargs = dict(nimportant_vars = 8, njobs = 20, nbootstrap = 20), single_only = True)

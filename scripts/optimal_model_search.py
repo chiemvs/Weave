@@ -10,7 +10,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 from pathlib import Path
-from sklearn.ensemble import RandomForestRegressor
+from sklearn.ensemble import RandomForestRegressor, RandomForestClassifier
 from scipy.signal import detrend
 from multiprocessing import Pool
 
@@ -23,7 +23,7 @@ OUTDIR = Path(sys.argv[5])
 sys.path.append(PACKAGEDIR)
 from Weave.models import hyperparam_evaluation, permute_importance
 
-logging.basicConfig(filename= TMPDIR / 'importance.log', filemode='w', level=logging.DEBUG, format='%(process)d-%(relativeCreated)d-%(message)s')
+logging.basicConfig(filename= TMPDIR / 'importanceq09.log', filemode='w', level=logging.DEBUG, format='%(process)d-%(relativeCreated)d-%(message)s')
 
 # Merging the snow and other dimreduced timeseries
 # PATTERNDIR = Path('/scistor/ivm/jsn295/clusterpar3_roll_spearman_varalpha/') #Path('/scistor/ivm/jsn295/clustertest_roll_spearman_varalpha/')
@@ -84,8 +84,13 @@ def execute_perm_imp(respseptup):
     retpath = OUTDIR / str(responseagg) / str(separation)
     if not retpath.exists():
         X,y = read_data(responseagg = responseagg, separation = separation)
-        m = RandomForestRegressor(max_depth = 20, n_estimators = 1500, min_samples_split = 35, max_features = 0.2, n_jobs = njobs_per_imp)
-        ret = permute_importance(m, X_in = X, y_in = y, perm_imp_kwargs = dict(nimportant_vars = 8, njobs = njobs_per_imp, nbootstrap = 500))
+        y = y > y.quantile(0.9)
+        #m = RandomForestRegressor(max_depth = 20, n_estimators = 1500, min_samples_split = 35, max_features = 0.2, n_jobs = njobs_per_imp)
+        def wrapper(self, *args, **kwargs):
+            return self.predict_proba(*args,**kwargs)[:,-1] # Last class is True
+        RandomForestClassifier.predict = wrapper # To avoid things inside permutation importance package  where it is only possible to invoke probabilistic prediction with twoclass y.
+        m = RandomForestClassifier(max_depth = 5, n_estimators = 1500, min_samples_split = 20, max_features = 0.15, n_jobs = njobs_per_imp)
+        ret = permute_importance(m, X_in = X, y_in = y, evaluation_fn = brier_score_loss, perm_imp_kwargs = dict(nimportant_vars = 8, njobs = njobs_per_imp, nbootstrap = 500))
         retpath.mkdir(parents = True)
         pq.write_table(pa.Table.from_pandas(ret), retpath / 'responsagg_separation.parquet')
         logging.debug(f'subprocess has written out importance frame at {retpath}')
@@ -100,3 +105,6 @@ if __name__ == "__main__":
     separations = np.unique(pd.read_parquet(path_complete).columns.get_level_values('separation'))
     with Pool(nprocs) as p:
         p.map(execute_perm_imp, itertools.product(responseaggs, separations))
+    #njobs_per_imp = NPROC
+    #for respagg_sep in itertools.product(responseaggs, separations):
+    #    execute_perm_imp(respagg_sep)

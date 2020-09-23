@@ -9,11 +9,13 @@ import numpy as np
 import xarray as xr
 import pandas as pd
 import ctypes as ct
+import matplotlib.pyplot as plt
 from collections import namedtuple
 from typing import Union, Callable, Tuple
 from scipy.stats import rankdata, spearmanr, pearsonr, weightedtau, t
 from sklearn.linear_model import LinearRegression
 from sklearn.preprocessing import scale
+from sklearn.calibration import calibration_curve
 
 Region = namedtuple("Region", ["name", "latmax","lonmin", "latmin", "lonmax"])
 
@@ -316,3 +318,41 @@ def get_timeserie_properties(series: pd.Series, submonths: list = None, scale_tr
         lagged = pd.Series(series.values, index = series.index - pd.Timedelta(f'{lag}D'), name = f'{lag}D')
         results.loc[f'auto{lag}'] = pd.merge(left = series, right = lagged, left_index=True, right_index=True, how = 'inner').corr().iloc[0,-1]
     return(results)
+
+def brier_score_clim(p: float) -> float:
+    """
+    Determines the climatological reference score for an event with a probability p
+    bs_ref = p*(p-1)**2 + (1-p)*(p-0)**2
+    """
+    return p*(p-1)**2 + (1-p)*p**2
+
+def reliability_plot(y_true: pd.Series, y_probs: Union[pd.Series,pd.DataFrame], nbins: int = 10):
+    """
+    Computes the calibration curve for probabilistic predictions of a binary variable
+    The true binary labels are supplied by y_true
+    The matching probabilistic predictions (same row-index) are supplied in y_probs,
+    different predictions can be supplied as columns 
+    These predictions are binned and for each bin the corresponding frequency is computed
+    returns the figure and two axes
+    """
+    assert np.all(y_true.index == y_probs.index), 'indices should match'
+
+    fig = plt.figure(figsize=(7,7))
+    ax1 = plt.subplot2grid((3, 1), (0, 0), rowspan=2)
+    ax2 = plt.subplot2grid((3, 1), (2, 0))
+
+    ax1.plot([0, 1], [0, 1], "k:", label="Perfect")
+    if isinstance(y_probs, pd.Series):
+        y_probs = y_probs.to_frame()
+
+    for column_tuple in y_probs.columns:
+        fraction_of_positives, mean_predicted_value = calibration_curve(y_true, y_probs[column_tuple], n_bins=nbins)
+        ax1.plot(mean_predicted_value,fraction_of_positives, 's-',label = str(column_tuple))
+        ax2.hist(y_probs[column_tuple], range=(0,1), bins=nbins, histtype="step", lw=2)
+
+    ax1.legend(title = ','.join(y_probs.columns.names))
+    ax1.set_ylabel('conditional observed frequency')
+    ax2.set_ylabel('counts')
+    ax2.set_xlabel('mean predicted probability')
+
+    return fig, [ax1,ax2]
