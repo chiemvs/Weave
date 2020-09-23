@@ -11,6 +11,7 @@ import pyarrow.parquet as pq
 
 from pathlib import Path
 from sklearn.ensemble import RandomForestRegressor, RandomForestClassifier
+from sklearn.metrics import brier_score_loss
 from scipy.signal import detrend
 from multiprocessing import Pool
 
