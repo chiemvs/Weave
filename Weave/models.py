@@ -15,13 +15,18 @@ from sklearn.metrics import mean_squared_error, r2_score, mean_absolute_error, b
 from sklearn.ensemble import RandomForestRegressor, RandomForestClassifier
 from PermutationImportance import sklearn_permutation_importance
 
-def evaluate(y_true, y_pred, scores = [r2_score, mean_squared_error, mean_absolute_error], score_names = ['r2','mse','mae']) -> pd.Series:
+def evaluate(data = None, y_true = None, y_pred = None, scores = [r2_score, mean_squared_error, mean_absolute_error], score_names = ['r2','mse','mae']) -> pd.Series:
     """
     Calls scores one by one a set of predictions and true values
+    these can be provided separately (both 1D) or as a joined 2D data array [:,0] true, [:,1] pred 
+    this is to enable integration with bootstrapping util (repeated call of evaluate on resamples of data)
     scores should be functions that accept (y_true,y_pred) and return a float
     default are determinisic regression scores
     supply others for classification and/or probabilistic prediction like [brier_score,log_likelyhood,reliability] 
     """
+    if (y_true is None) or (y_pred is None):
+        y_true = data[:,0]
+        y_pred = data[:,1]
     assert y_true.size == y_pred.size, "True values and predicted values should be array-like and have the same size"
     assert (len(y_true.shape) == 1) and (len(y_pred.shape) == 1), "True values and predicted values should be array-like and 1D"
     returns = pd.Series(np.full((len(scores),), np.nan, dtype = np.float64), index = pd.Index(score_names, name = 'score'))
@@ -248,18 +253,26 @@ if __name__ == '__main__':
     #X_path = '/nobackup_1/users/straaten/spatcov/precursor.multiagg.parquet'
     #Y_path = '/scistor/ivm/jsn295/clustertest_roll_spearman_varalpha/response.multiagg.trended.parquet'
     #X_path = '/scistor/ivm/jsn295/clustertest_roll_spearman_varalpha/precursor.multiagg.parquet'
-    #Y_path = '/scistor/ivm/jsn295/clusterpar3_roll_spearman_varalpha/response.multiagg.trended.parquet'
-    #X_path = '/scistor/ivm/jsn295/clusterpar3_roll_spearman_varalpha/precursor.multiagg.parquet'
-    #y = pd.read_parquet(Y_path).loc[:,(slice(None),7,slice(None))].iloc[:,0] # Only summer
-    #X = pd.read_parquet(X_path).loc[y.index, (slice(None),slice(None),slice(None),-7,slice(None),'spatcov')].dropna(axis = 0, how = 'any')
-    #y = y.reindex(X.index)
-    #y = pd.Series(detrend(y), index = y.index, name = y.name) # Also here you see that detrending improves Random forest performance a bit
-    #y = y > y.quantile(0.9)
+    Y_path = '/scistor/ivm/jsn295/clusterpar3_roll_spearman_varalpha/response.multiagg.trended.parquet'
+    X_path = '/scistor/ivm/jsn295/clusterpar3_roll_spearman_varalpha/precursor.multiagg.parquet'
+    y = pd.read_parquet(Y_path).loc[:,(slice(None),15,slice(None))].iloc[:,0] # Only summer
+    X = pd.read_parquet(X_path).loc[y.index, (slice(None),slice(None),slice(None),-31,slice(None),'spatcov')].dropna(axis = 0, how = 'any')
+    y = y.reindex(X.index)
+    y = pd.Series(detrend(y), index = y.index, name = y.name) # Also here you see that detrending improves Random forest performance a bit
+    y = y > y.quantile(0.8)
 
     # Testing a classifier
     #y = y > y.quantile(0.9)
-    #r2 = RandomForestClassifier(max_depth = 20, n_estimators = 750, min_samples_split = 50, max_features = 0.3, n_jobs = 7, class_weight = 'balanced') # Balanced class weight helps a lot.
-    #test = fit_predict_evaluate(r2, X.iloc[:2000,:], y.iloc[:2000],X.iloc[2000:,:], y.iloc[2000:], properties_too = True, evaluate_kwds = dict(scores = [brier_score_loss,log_loss], score_names = ['bs','ll']))
+    r2 = RandomForestClassifier(max_depth = 5, n_estimators = 1500, min_samples_split = 20, max_features = 0.15, n_jobs = 20) # Balanced class weight helps a lot.
+    test = fit_predict(r2, X, y, n_folds = 5) # evaluate_kwds = dict(scores = [brier_score_loss,log_loss], score_names = ['bs','ll'])
+    test.index = test.index.droplevel(0)
+    data = np.stack([y.values,test.values], axis = -1)
+    from utils import bootstrap, brier_score_clim 
+    f = bootstrap(5000, return_numeric = True, quantile = [0.05,0.5,0.95])(evaluate)
+    f2 = bootstrap(5000, blocksize = 15, return_numeric = True, quantile = [0.05,0.5,0.95])(evaluate) # object dtype array
+    evaluate_kwds = dict(scores = [brier_score_loss], score_names = ['bs'])
+    ret = f(data, **evaluate_kwds)
+    ret2 = f2(data, **evaluate_kwds)
     
     #hyperparams = dict(min_samples_split = [30,35], max_depth = [15,17,20,23])
     #hyperparams = dict(min_samples_split = [30,35,40], max_depth = [15,20,25])

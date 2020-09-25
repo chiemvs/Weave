@@ -99,13 +99,13 @@ def execute_perm_imp(respseptup):
         logging.debug(f'importance frame at {retpath} already exists')
 
 if __name__ == "__main__":
-    njobs_per_imp = 1
-    nprocs = NPROC // njobs_per_imp
-    logging.debug(f'Spinning up {nprocs} processes with each {njobs_per_imp} for permutation importance')
+    #njobs_per_imp = 1
+    #nprocs = NPROC // njobs_per_imp
+    #logging.debug(f'Spinning up {nprocs} processes with each {njobs_per_imp} for permutation importance')
     responseaggs = np.unique(pd.read_parquet(path_y).columns.get_level_values('timeagg'))
     separations = np.unique(pd.read_parquet(path_complete).columns.get_level_values('separation'))
-    with Pool(nprocs) as p:
-        p.map(execute_perm_imp, itertools.product(responseaggs, separations))
-    #njobs_per_imp = NPROC
-    #for respagg_sep in itertools.product(responseaggs, separations):
-    #    execute_perm_imp(respagg_sep)
+    #with Pool(nprocs) as p:
+    #    p.map(execute_perm_imp, itertools.product(responseaggs, separations))
+    njobs_per_imp = NPROC
+    for respagg_sep in itertools.product(responseaggs, separations):
+        execute_perm_imp(respagg_sep)

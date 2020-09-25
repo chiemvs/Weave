@@ -240,7 +240,7 @@ def chi(responseseries: xr.DataArray, precursorseries: xr.DataArray, nq: int = 1
         else:
             return (np.nan,np.nan) # Artificial creation of significance
 
-def bootstrap(n_draws: int, blocksize: int = None, quantile: Union[int, list] = None) -> Callable:
+def bootstrap(n_draws: int, return_numeric = True, blocksize: int = None, quantile: Union[int, list] = None) -> Callable:
     """
     Bootstrapping a function that takes 1D/2D data array as a first argument 
     By resampling this array along the zeroth axis.
@@ -250,8 +250,13 @@ def bootstrap(n_draws: int, blocksize: int = None, quantile: Union[int, list] = 
     Or returns the requested quantiles of the collection 
     """
     def actual_decorator(func: Callable) -> Callable:
+        if not return_numeric:
+            assert quantile is None, 'If your function is going to return objects (return_numeric = False) you cannot extract quantiles'
+            return_type = object
+        else:
+            return_type = np.nan
         def bootstrapper(*args, **kwargs) -> np.ndarray:
-            collection = np.full((n_draws,), np.nan)
+            collection = np.full((n_draws,), return_type)
             try: # Fish the data from any of the arguments, either called data or the first argument
                 data = kwargs.pop('data')
             except KeyError:
@@ -342,6 +347,7 @@ def reliability_plot(y_true: pd.Series, y_probs: Union[pd.Series,pd.DataFrame], 
     ax2 = plt.subplot2grid((3, 1), (2, 0))
 
     ax1.plot([0, 1], [0, 1], "k:", label="Perfect")
+    ax2.set_yscale('log')
     if isinstance(y_probs, pd.Series):
         y_probs = y_probs.to_frame()
 
