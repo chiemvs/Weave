@@ -166,7 +166,7 @@ class Clustering(object):
         except AttributeError:
             raise AttributeError(f'{self} cannot load an xr.DataArray from disk in {self.varpath}')
     
-    def reshape_and_drop_obs(self, array: xr.DataArray = None, mask: xr.DataArray = None, season: str = None) -> None:
+    def reshape_and_drop_obs(self, array: xr.DataArray = None, mask: xr.DataArray = None, min_samples: int = 1, season: str = None) -> None:
         """
         The goal is a 2D array with (n_features, n_samples) with irrelevant observations dropped.
         When the array is 3D (n_features,l,m) this reshapes it into 2D (n_features,l*m)
@@ -202,8 +202,8 @@ class Clustering(object):
                 mask = mask.stack(self.stackdim)
             logging.debug(f'{self} will mask out {(~mask).sum().values} of {self.array.shape[-1]} samples')
             self.array = self.array[:,mask.values]
-            if self.array.shape[-1] == 0: 
-                raise MaskingError('All samples have been masked out, cannot procede')
+            if self.array.shape[-1] < min_samples: 
+                raise MaskingError(f'Too many samples have been masked out resulting in less than {min_samples}, cannot procede')
         
         # Capture the coords of data after masking.
         self.samplecoords = self.array.coords[self.array.dims[-1]]

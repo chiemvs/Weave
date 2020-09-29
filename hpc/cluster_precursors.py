@@ -56,7 +56,7 @@ for corrpath in corrfiles:
         for lag in lags:
             cl = Clustering()
             try:
-                cl.reshape_and_drop_obs(array = ds[invarname], mask = ~ds[invarname].sel(lag = lag).isnull())
+                cl.reshape_and_drop_obs(array = ds[invarname], mask = ~ds[invarname].sel(lag = lag).isnull(), min_samples = 700)
                 cl.prepare_for_distance_algorithm(manipulator = Latlons, kwargs = {'to_radians':True}) # Conversion to radians because HDBSCAN uses that.
                 clusters = cl.clustering(clusterclass = HDBSCAN, kwargs = clusterkwargs)
 #            with Clustering() as cl: # This is the memory heavy precomputed DBSCAN variety
@@ -65,10 +65,10 @@ for corrpath in corrfiles:
 #                clusters = cl.clustering(clusterclass = DBSCAN, kwargs = {'eps':1300, 'min_samples':2000})
                 nclusters = int(clusters.coords["nclusters"]) # nclusters returned as coordinate because this matches bahaviour of the non-DBSCAN algorithms, even though with DBSCAN it is only a dimension of length 1
                 logging.debug(f'clustered {invarname} of {filename} by spatial haversine distance with HDBSCAN for lag: {lag}, resulting nclusters: {nclusters}')
-            except MaskingError: # Happens when masking results in zero samples 
+            except MaskingError: # Happens when masking results in zero or less than the minimum samples 
                 nclusters = 0
                 clusters = xr.DataArray(np.nan, dims = cl.samplefield.dims, coords = cl.samplefield.drop_vars('lag').coords)
-                logging.debug(f'No samples were present after masking {invarname} of {filename} for lag: {lag}. HDBSCAN was not called. A field with zero clusters is returned.')
+                logging.debug(f'No/too little samples were present after masking {invarname} of {filename} for lag: {lag}. HDBSCAN was not called. A field with zero clusters is returned.')
                 
             attrs.update({f'lag{lag}':f'nclusters: {nclusters}'}) 
             combined.append(clusters.squeeze().drop_vars('nclusters', errors = 'ignore'))
