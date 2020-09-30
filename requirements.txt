@@ -11,3 +11,4 @@ haversine==2.2.0
 pyarrow==1.0.0
 hdbscan==0.8.26
 PermutationImportance==1.2.1.6
+matplotlib
