@@ -205,7 +205,7 @@ def permute_importance(model: Callable, X_in, y_in, X_val = None, y_val = None, 
         model.fit(X = X_train, y = y_train)
         y_val = y_val.to_frame() # Required form for perm imp
         X_val.columns = ['.'.join([str(c) for c in col]) for col in X_val.columns.values] # Collapse of the index is required unfortunately
-        result = sklearn_permutation_importance(model = model, scoring_data = (X_val, y_val), evaluation_fn = evaluation_fn, scoring_strategy = scoring_strategy, variable_names = X_val.columns.values, **perm_imp_kwargs)
+        result = sklearn_permutation_importance(model = model, scoring_data = (X_val.values, y_val.values), evaluation_fn = evaluation_fn, scoring_strategy = scoring_strategy, variable_names = X_val.columns, **perm_imp_kwargs) # Pass the data as numpy arrays. Avoid bug in PermutationImportance, see scripts/minimum_example.py
         singlepass = result.retrieve_singlepass()
         singlepass_rank_scores = pd.DataFrame([{'rank':tup[0], 'score':np.mean(tup[1])} for tup in singlepass.values()]) # We want to export both rank and mean score. (It is allowed to average here over all bootstraps even when this happens in one fold of the cross validation, as the grand mean will be equal as group sizes are equal over all cv-folds)
         singlepass_rank_scores.index = pd.MultiIndex.from_tuples([tuple(string.split('.')) for string in singlepass.keys()], names = X_train.columns.names)
@@ -253,37 +253,35 @@ if __name__ == '__main__':
     #X_path = '/nobackup_1/users/straaten/spatcov/precursor.multiagg.parquet'
     #Y_path = '/scistor/ivm/jsn295/clustertest_roll_spearman_varalpha/response.multiagg.trended.parquet'
     #X_path = '/scistor/ivm/jsn295/clustertest_roll_spearman_varalpha/precursor.multiagg.parquet'
-    Y_path = '/scistor/ivm/jsn295/clusterpar3_roll_spearman_varalpha/response.multiagg.trended.parquet'
-    X_path = '/scistor/ivm/jsn295/clusterpar3_roll_spearman_varalpha/precursor.multiagg.parquet'
-    y = pd.read_parquet(Y_path).loc[:,(slice(None),15,slice(None))].iloc[:,0] # Only summer
-    X = pd.read_parquet(X_path).loc[y.index, (slice(None),slice(None),slice(None),-31,slice(None),'spatcov')].dropna(axis = 0, how = 'any')
-    y = y.reindex(X.index)
-    y = pd.Series(detrend(y), index = y.index, name = y.name) # Also here you see that detrending improves Random forest performance a bit
-    y = y > y.quantile(0.8)
+    #Y_path = '/scistor/ivm/jsn295/clusterpar3_roll_spearman_varalpha/response.multiagg.trended.parquet'
+    #X_path = '/scistor/ivm/jsn295/clusterpar3_roll_spearman_varalpha/precursor.multiagg.parquet'
+    #y = pd.read_parquet(Y_path).loc[:,(slice(None),1,slice(None))].iloc[:,0] # Only summer
+    #X = pd.read_parquet(X_path).loc[y.index, (slice(None),slice(None),slice(None),0,slice(None),'spatcov')].dropna(axis = 0, how = 'any')
+    #X = X.sort_index(axis = 1).loc[:,(slice(None),slice(21,22))] # Small subset fit test
+    #y = y.reindex(X.index)
+    #y = pd.Series(detrend(y), index = y.index, name = y.name) # Also here you see that detrending improves Random forest performance a bit
+    #y = y > y.quantile(0.8)
 
     # Testing a classifier
-    #y = y > y.quantile(0.9)
-    r2 = RandomForestClassifier(max_depth = 5, n_estimators = 1500, min_samples_split = 20, max_features = 0.15, n_jobs = 20) # Balanced class weight helps a lot.
-    test = fit_predict(r2, X, y, n_folds = 5) # evaluate_kwds = dict(scores = [brier_score_loss,log_loss], score_names = ['bs','ll'])
-    test.index = test.index.droplevel(0)
-    data = np.stack([y.values,test.values], axis = -1)
-    from utils import bootstrap, brier_score_clim 
-    f = bootstrap(5000, return_numeric = True, quantile = [0.05,0.5,0.95])(evaluate)
-    f2 = bootstrap(5000, blocksize = 15, return_numeric = True, quantile = [0.05,0.5,0.95])(evaluate) # object dtype array
-    evaluate_kwds = dict(scores = [brier_score_loss], score_names = ['bs'])
-    ret = f(data, **evaluate_kwds)
-    ret2 = f2(data, **evaluate_kwds)
+    #r2 = RandomForestClassifier(max_depth = 5, n_estimators = 1500, min_samples_split = 20, max_features = 0.15, n_jobs = 20) # Balanced class weight helps a lot.
+    #test = fit_predict(r2, X, y, n_folds = 5) # evaluate_kwds = dict(scores = [brier_score_loss,log_loss], score_names = ['bs','ll'])
+    #test.index = test.index.droplevel(0)
+    #data = np.stack([y.values,test.values], axis = -1)
+    #from utils import bootstrap, brier_score_clim 
+    #f = bootstrap(5000, return_numeric = True, quantile = [0.05,0.5,0.95])(evaluate)
+    #f2 = bootstrap(5000, blocksize = 15, return_numeric = True, quantile = [0.05,0.5,0.95])(evaluate) # object dtype array
+    #evaluate_kwds = dict(scores = [brier_score_loss], score_names = ['bs'])
+    #ret = f(data, **evaluate_kwds)
+    #ret2 = f2(data, **evaluate_kwds)
     
     #hyperparams = dict(min_samples_split = [30,35], max_depth = [15,17,20,23])
-    #hyperparams = dict(min_samples_split = [30,35,40], max_depth = [15,20,25])
     #hyperparams = dict(min_impurity_decrease = [0.001,0.002,0.003,0.005,0.01])
     #hyperparams = dict(max_features = [0.05,0.1,0.15,0.2,0.25])
     #other_kwds = dict(n_jobs = 20, n_estimators = 1000, max_features = 0.2) 
-    #other_kwds = dict(n_jobs = 20, n_estimators = 750, min_samples_split = 50, max_depth = 30)
     #ret = hyperparam_evaluation(RandomForestRegressor, X, y, hyperparams, other_kwds,  fit_predict_evaluate_kwds = dict(properties_too = True))
     
     #def wrapper(self, *args, **kwargs):
     #    return self.predict_proba(*args,**kwargs)[:,-1] # Last class is True
     #RandomForestClassifier.predict = wrapper # To avoid things inside permutation importance package  
-    #m = RandomForestClassifier(max_depth = 5, min_samples_split = 20, n_jobs = 20, max_features = 0.15,n_estimators = 2)
-    #ret = permute_importance(m, X_in = X, y_in = y, evaluation_fn = brier_score_loss, perm_imp_kwargs = dict(nimportant_vars = 8, njobs = 20, nbootstrap = 20), single_only = True)
+    #m = RandomForestClassifier(max_depth = 5, min_samples_split = 20, n_jobs = 20, max_features = 0.15, n_estimators = 1500)
+    #ret = permute_importance(m, X_in = X, y_in = y, n_folds = 5, evaluation_fn = brier_score_loss, perm_imp_kwargs = dict(nimportant_vars = None, njobs = 20, nbootstrap = 1500))
