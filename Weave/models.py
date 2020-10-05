@@ -10,7 +10,7 @@ import logging
 
 from typing import Callable
 from collections import OrderedDict
-from sklearn.model_selection import KFold
+from sklearn.model_selection import KFold, GroupKFold
 from sklearn.metrics import mean_squared_error, r2_score, mean_absolute_error, brier_score_loss, log_loss
 from sklearn.ensemble import RandomForestRegressor, RandomForestClassifier
 from PermutationImportance import sklearn_permutation_importance
@@ -34,17 +34,16 @@ def evaluate(data = None, y_true = None, y_pred = None, scores = [r2_score, mean
         returns.loc[name] = score(y_true, y_pred)
     return returns
 
-def crossvalidate(n_folds: int = 10) -> Callable:
+def crossvalidate(n_folds: int = 10, split_on_year: bool = False) -> Callable:
     def actual_decorator(func: Callable) -> Callable:
         """
         Manipulates the input arguments of func
         X_in and y_in are distributed over X_train, y_train, X_val, y_val
         func should be a function that returns pandas objects
         TODO: remove debugging print statements
+        possibility to split cleanly on years. Years are grouped into distinct consecutive groups, such that the amount of groups equals the disered amount of folds.
         """
         def wrapper(*args, **kwargs) -> pd.Series:
-            kf = KFold(n_splits=n_folds)
-            results = []
             try:
                 X_in = kwargs.pop('X_in')
                 y_in = kwargs.pop('y_in')
@@ -53,8 +52,20 @@ def crossvalidate(n_folds: int = 10) -> Callable:
                 X_in, y_in = args[1:3] # Model is often the first argument
                 args = args[:1] + args[3:]
                 print('manipulating args', args)
+            if split_on_year:
+                assert isinstance(X_in,(pd.Series,pd.DataFrame)), 'Pandas object with time index is needed'
+                assert n_folds <= len(X_in.index.year.unique()), 'More folds than unique years requested. Unable to split_on_year.'
+                kf = GroupKFold(n_splits = n_folds)
+                groupsize = int(np.ceil(len(X_in.index.year.unique()) / n_folds)) # Maximum even groupsize, except for the last fold, if unevenly divisible then last fold gets only the remainder.
+                groups = (X_in.index.year - X_in.index.year.min()).map(lambda year: year // groupsize)  
+                assert len(groups.unique()) == n_folds
+                kf_kwargs = dict(X = X_in, groups = groups)
+            else:
+                kf = KFold(n_splits = n_folds)
+                kf_kwargs = dict(X = X_in)
+            results = []
             k = 0
-            for train_index, val_index in kf.split(X_in): # This generates integer indices, ultimately pure numpy and slices would give views. No copy of data, better for distributed
+            for train_index, val_index in kf.split(**kf_kwargs): # This generates integer indices, ultimately pure numpy and slices would give views. No copy of data, better for distributed
                 if isinstance(X_in, pd.DataFrame):
                     X_train, X_val = X_in.iloc[train_index,:], X_in.iloc[val_index]
                     y_train, y_val = y_in.iloc[train_index], y_in.iloc[val_index]
@@ -93,7 +104,7 @@ def balance_training_data(how: str, X_train, y_train):
     except AttributeError: # Not pandas objects but numpy arrays
         return X_train[false_true_picks,:], y_train[false_true_picks]
 
-def fit_predict_evaluate(model: Callable, X_in, y_in, X_val = None, y_val = None, n_folds = 10, balance_training: str = None, compare_val_train: bool = True, properties_too: bool = False, evaluate_kwds: dict = dict()) -> pd.Series:
+def fit_predict_evaluate(model: Callable, X_in, y_in, X_val = None, y_val = None, n_folds = 10, split_on_year = True, balance_training: str = None, compare_val_train: bool = True, properties_too: bool = False, evaluate_kwds: dict = dict()) -> pd.Series:
     """
     Calls the fitting and predict method of the already initialized model 
     If X_val and y_val are not supplied then it is assumed that X_in and y_in comprise both training and validation data
@@ -129,12 +140,12 @@ def fit_predict_evaluate(model: Callable, X_in, y_in, X_val = None, y_val = None
         return scores
 
     if (X_val is None) or (y_val is None):
-        f = crossvalidate(n_folds = n_folds)(inner_func)
+        f = crossvalidate(n_folds = n_folds, split_on_year = split_on_year)(inner_func)
         return f(model, X_in, y_in) # Conversion of arguments from X_in/y_in to X_train/y_train and X_val/y_val happens inside the decorating wrapper function
     else:
         return inner_func(model = model, X_train = X_in, y_train = y_in, X_val = X_val, y_val = y_val)
 
-def fit_predict(model: Callable, X_in, y_in, X_val = None, y_val = None, n_folds = 10, balance_training: str = None):
+def fit_predict(model: Callable, X_in, y_in, X_val = None, y_val = None, n_folds = 10, split_on_year = True, balance_training: str = None):
     """
     Similar to fit_predict_evaluate, but only designed to make predictions for validation
     Within cv-mode this can give you a full set of predictions on which (in total) you can call an evaluation function,
@@ -155,7 +166,7 @@ def fit_predict(model: Callable, X_in, y_in, X_val = None, y_val = None, n_folds
         return pd.Series(preds, index = y_val.index)
 
     if (X_val is None) or (y_val is None):
-        f = crossvalidate(n_folds = n_folds)(inner_func)
+        f = crossvalidate(n_folds = n_folds, split_on_year = split_on_year)(inner_func)
         return f(model, X_in, y_in) # Conversion of arguments from X_in/y_in to X_train/y_train and X_val/y_val happens inside the decorating wrapper function
     else:
         return inner_func(model = model, X_train = X_in, y_train = y_in, X_val = X_val, y_val = y_val)
@@ -188,7 +199,7 @@ def hyperparam_evaluation(model: Callable, X_in, y_in, hyperparams: dict, other_
     full.columns.names = list(keynames)
     return full
 
-def permute_importance(model: Callable, X_in, y_in, X_val = None, y_val = None, evaluation_fn = mean_absolute_error, scoring_strategy = 'argmax_of_mean', perm_imp_kwargs: dict = dict(nimportant_vars = 8, njobs = -1, nbootstrap = 500), single_only: bool = False, n_folds = 10):
+def permute_importance(model: Callable, X_in, y_in, X_val = None, y_val = None, evaluation_fn = mean_absolute_error, scoring_strategy = 'argmax_of_mean', perm_imp_kwargs: dict = dict(nimportant_vars = 8, njobs = -1, nbootstrap = 500), single_only: bool = False, n_folds = 10, split_on_year = True):
     """
     Calls permutation importance functionality 
     This functionality does single-multi-pass permutation on the validation part of the data
@@ -220,7 +231,7 @@ def permute_importance(model: Callable, X_in, y_in, X_val = None, y_val = None, 
             return singlepass_rank_scores.join(multipass_rank_scores, how = 'left') # Index based merge
 
     if (X_val is None) or (y_val is None):
-        f = crossvalidate(n_folds = n_folds)(inner_func)
+        f = crossvalidate(n_folds = n_folds, split_on_year = split_on_year)(inner_func)
         return f(model = model, X_in = X_in, y_in = y_in) # Conversion of kwargs from X_in/y_in to X_train/y_train and X_val/y_val happens inside the decorating wrapper function
     else:
         return inner_func(model = model, X_train = X_in, y_train = y_in, X_val = X_val, y_val = y_val) 
@@ -257,10 +268,22 @@ if __name__ == '__main__':
     #X_path = '/scistor/ivm/jsn295/clusterpar3_roll_spearman_varalpha/precursor.multiagg.parquet'
     #y = pd.read_parquet(Y_path).loc[:,(slice(None),1,slice(None))].iloc[:,0] # Only summer
     #X = pd.read_parquet(X_path).loc[y.index, (slice(None),slice(None),slice(None),0,slice(None),'spatcov')].dropna(axis = 0, how = 'any')
-    #X = X.sort_index(axis = 1).loc[:,(slice(None),slice(21,22))] # Small subset fit test
+    ##X = X.sort_index(axis = 1).loc[:,(slice(None),slice(21,22))] # Small subset fit test
     #y = y.reindex(X.index)
     #y = pd.Series(detrend(y), index = y.index, name = y.name) # Also here you see that detrending improves Random forest performance a bit
     #y = y > y.quantile(0.8)
+
+    # Testing cross validation split on_year vs not on_year
+    # Validation folds should be distinc years
+    #def test_func(model, X_train, y_train, X_val, y_val):
+    #    print('trainslice:', y_train.index.min(), y_train.index.max())
+    #    print('valslice:', y_val.index.min(), y_val.index.max())
+    #    return pd.Series(dtype = np.int32)
+    #
+    #f1 = crossvalidate(n_folds = 5, split_on_year = False)(test_func)
+    #f1(model = None, X_in = X, y_in = y)
+    #f2 = crossvalidate(n_folds = 5, split_on_year = True)(test_func)
+    #f2(model = None, X_in = X, y_in = y)
 
     # Testing a classifier
     #r2 = RandomForestClassifier(max_depth = 5, n_estimators = 1500, min_samples_split = 20, max_features = 0.15, n_jobs = 20) # Balanced class weight helps a lot.

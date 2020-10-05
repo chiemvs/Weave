@@ -74,7 +74,7 @@ def execute_perm_imp(respseptup):
             return self.predict_proba(*args,**kwargs)[:,-1] # Last class is True
         RandomForestClassifier.predict = wrapper # To avoid things inside permutation importance package  where it is only possible to invoke probabilistic prediction with twoclass y.
         m = RandomForestClassifier(max_depth = 5, n_estimators = 1500, min_samples_split = 20, max_features = 0.15, n_jobs = njobs_per_imp)
-        ret = permute_importance(m, X_in = X, y_in = y, evaluation_fn = brier_score_loss, n_folds = 5, perm_imp_kwargs = dict(nimportant_vars = 20, njobs = njobs_per_imp, nbootstrap = 500))
+        ret = permute_importance(m, X_in = X, y_in = y, evaluation_fn = brier_score_loss, n_folds = 5, perm_imp_kwargs = dict(nimportant_vars = 20, njobs = njobs_per_imp, nbootstrap = 1500))
         retpath.mkdir(parents = True)
         pq.write_table(pa.Table.from_pandas(ret), retpath / 'responsagg_separation.parquet')
         logging.debug(f'subprocess has written out importance frame at {retpath}')
