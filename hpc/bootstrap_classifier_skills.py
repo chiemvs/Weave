@@ -40,7 +40,7 @@ def read_prepare_data(responseagg = 3, separation = -7, quantile: float = 0.9, d
 def get_classif_bs(X, y, hyperparams: dict, blocksizes: list = [None]):
     r2 = RandomForestClassifier(**hyperparams) 
     outcomes = fit_predict(r2, X, y, n_folds = 5)
-    outcomes.index = outcomes.index.droplevel(0) # Dropping the fold information
+    outcomes.index = outcomes.index.droplevel(0) # Dropping the fold information, already sorted by time in the crossvalidation
     data = np.stack([y.values,outcomes.values], axis = -1) # Preparing for bootstrap format
     evaluate_kwds = dict(scores = [brier_score_loss], score_names = ['bs'])
     bootstrap_quantiles = [0.05,0.5,0.95] 

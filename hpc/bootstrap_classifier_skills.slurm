@@ -9,5 +9,5 @@
 #SBATCH --output=../../python_%j.out
 #SBATCH --error=../../python_%j.err
 
-./start.sh ../requirements.txt ../scripts/classifier_skills.py 21 $HOME/clusterpar3_roll_spearman_varalpha $HOME/bootstrap_clean
+./start.sh ../requirements.txt ../hpc/bootstrap_classifier_skills.py 21 $HOME/clusterpar3_roll_spearman_varalpha $HOME/bootstrap_clean
 # ./start.sh requirements.txt test_script.py NPARPROCS DIRECTORIES (can be many)

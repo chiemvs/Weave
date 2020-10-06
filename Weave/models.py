@@ -42,6 +42,7 @@ def crossvalidate(n_folds: int = 10, split_on_year: bool = False) -> Callable:
         func should be a function that returns pandas objects
         TODO: remove debugging print statements
         possibility to split cleanly on years. Years are grouped into distinct consecutive groups, such that the amount of groups equals the disered amount of folds.
+        With split on year there is no guarantee of the folds [0 to nfolds-1] to be chronological on the time axis. Therefore a sorting of time index is needed.
         """
         def wrapper(*args, **kwargs) -> pd.Series:
             try:
@@ -76,7 +77,11 @@ def crossvalidate(n_folds: int = 10, split_on_year: bool = False) -> Callable:
                 print(f'fold {k}, kwargs: {kwargs.keys()}, args: {args}')
                 k += 1
                 results.append(func(*args, **kwargs))
-            return(pd.concat(results, axis = 0, keys = pd.RangeIndex(n_folds, name = 'fold')))
+            results = pd.concat(results, axis = 0, keys = pd.RangeIndex(n_folds, name = 'fold')) 
+            if split_on_year:
+                return(results.sort_index(axis = 0, level = -1)) # Lowest level perhaps called time, highest level in the hierarchy has just become fold,
+            else:
+                return(results)
         return wrapper
     return actual_decorator
 
@@ -149,7 +154,7 @@ def fit_predict(model: Callable, X_in, y_in, X_val = None, y_val = None, n_folds
     """
     Similar to fit_predict_evaluate, but only designed to make predictions for validation
     Within cv-mode this can give you a full set of predictions on which (in total) you can call an evaluation function,
-    discarding the folds.
+    for that you can discard the fold index. And check (when used with split_on_year) that the index matches you y_val variable index 
     """
     if isinstance(model, RandomForestClassifier): # Renaming of the methods, such that the preferred one for the classifier is a probabilistic prediction
         def wrapper(*args, **kwargs):
