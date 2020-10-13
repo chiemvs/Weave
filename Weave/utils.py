@@ -116,6 +116,33 @@ def _zvalue_from_index(arr: np.ndarray, ind: np.ndarray) -> np.ndarray:
         
     return(np.take(arr, idx))
 
+def collapse_restore_multiindex(df: Union[pd.DataFrame,pd.Series], axis: int, names: list = None, ignore_level: int = None, separator: str = '.', inplace: bool = False) -> list:
+    """
+    Used to collapse a pandas multi_index, for instance for the use case where a plotting procedure requires single level understandable column names 
+    Ignore_level only used when collapsing, by calling droplevel, so could also be a string according to the pandas api
+    Returns a list with the old column names, if not inplace also the new frame
+    """
+    assert (axis == 0) or (axis == 1), "can collapse/restore either the index or the columns, choose axis 0 or 1"
+    if axis == 0:
+        what = 'index' 
+    else:
+        what = 'columns' 
+    index = getattr(df, what)
+    if isinstance(index, pd.MultiIndex): # In this case we are going to collapse into a string
+        if not ignore_level is None:
+            index = index.droplevel(ignore_level)               
+        names = index.names.copy()
+        index = pd.Index([separator.join([str(c) for c in col]) for col in index.values], dtype = object, name = 'collapsed')
+    else: # In this case we are going to restore from string, new levels will all be string dtype
+        index = pd.MultiIndex.from_tuples([tuple(string.split(separator)) for string in index.values], names = names)
+    if inplace:
+        setattr(df, what, index)
+        return(None, names)
+    else:
+        df = df.copy()
+        setattr(df, what, index)
+        return(df, names)
+
 def agg_time(array: xr.DataArray, ndayagg: int = 1, method: str = 'mean', firstday: pd.Timestamp = None, rolling: bool = False) -> xr.DataArray:
     """
     Aggegates a daily time dimension, that should be continuous, otherwise non-neighbouring values are taken together. 

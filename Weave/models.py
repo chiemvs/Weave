@@ -271,7 +271,7 @@ def compute_forest_shaps(model: Callable, X_in, y_in, X_val = None, y_val = None
     """
     assert sample in ['standard','negative','positive']
     max_samples = 500
-    logging.debug(f'TreeShap will be started for {"validation" if on_validation else "training"}, with background data from {"validation" if not bg_from_trainging else "training"}, event sampling is {sample}')
+    logging.debug(f'TreeShap will be started for {"validation" if on_validation else "training"}, with background data from {"validation" if not bg_from_training else "training"}, event sampling is {sample}')
     # Use similar setup as fit_predict_evaluate, with an inner_func that is potentially called multiple times
     def inner_func(model, X_train, y_train, X_val: pd.DataFrame, y_val: pd.Series) -> pd.DataFrame:
         """
