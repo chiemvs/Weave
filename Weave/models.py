@@ -7,6 +7,7 @@ import numpy as np
 import pandas as pd
 import itertools
 import logging
+import shap
 
 from typing import Callable
 from collections import OrderedDict
@@ -48,11 +49,9 @@ def crossvalidate(n_folds: int = 10, split_on_year: bool = False) -> Callable:
             try:
                 X_in = kwargs.pop('X_in')
                 y_in = kwargs.pop('y_in')
-                print('manipulating kwargs', kwargs)
             except KeyError:
                 X_in, y_in = args[1:3] # Model is often the first argument
                 args = args[:1] + args[3:]
-                print('manipulating args', args)
             if split_on_year:
                 assert isinstance(X_in,(pd.Series,pd.DataFrame)), 'Pandas object with time index is needed'
                 assert n_folds <= len(X_in.index.year.unique()), 'More folds than unique years requested. Unable to split_on_year.'
@@ -74,7 +73,7 @@ def crossvalidate(n_folds: int = 10, split_on_year: bool = False) -> Callable:
                     X_train, X_val = X_in[train_index,:], X_in[val_index,:]
                     y_train, y_val = y_in[train_index], y_in[val_index]
                 kwargs.update({'X_train':X_train, 'y_train':y_train, 'X_val':X_val, 'y_val':y_val})
-                print(f'fold {k}, kwargs: {kwargs.keys()}, args: {args}')
+                logging.debug(f'fold {k}, kwargs: {kwargs.keys()}, args: {args}')
                 k += 1
                 results.append(func(*args, **kwargs))
             results = pd.concat(results, axis = 0, keys = pd.RangeIndex(n_folds, name = 'fold')) 
@@ -103,7 +102,6 @@ def balance_training_data(how: str, X_train, y_train):
     else:
         raise ValueError("balance_training how argument should be one of ['oversample','undersample']")
     logging.debug(f'training set has been balanced with {how} from {len(y_train)} to {len(false_true_picks)}')
-    print(f'training set has been balanced with {how} from {len(y_train)} to {len(false_true_picks)}')
     try:
         return X_train.iloc[false_true_picks,:], y_train.iloc[false_true_picks]
     except AttributeError: # Not pandas objects but numpy arrays
@@ -261,22 +259,63 @@ def get_forest_properties(forest: RandomForestRegressor, average: bool = True):
         return pd.DataFrame(counts, index = pd.RangeIndex(forest.n_estimators, name = 'tree'), columns = properties + derived_property)
     else:
         return pd.Series(counts.mean(axis = 0), index = pd.Index(properties + derived_property, name = 'properties'))
+
+def compute_forest_shaps(model: Callable, X_in, y_in, X_val = None, y_val = None, on_validation = True, bg_from_training = True, sample = 'standard', n_folds = 10, split_on_year = True, explainer_kwargs = dict()) -> pd.DataFrame:
+    """
+    Computation of (non-interaction) SHAP values through shap.TreeExplainer. Outputs a frame of shap values with same dimensions as X
+    A non-fitted forest (classifier or regressor), options to get the background data from the training or the validation
+    the sampling of the background can for instance be without balancing, but also in the case of classification
+    with only positives or negatives
+    other explainer kwargs are for instance a possible link function, or model_output
+    Cross-validation if X_val and y_val are not supplied
+    """
+    assert sample in ['standard','negative','positive']
+    max_samples = 500
+    logging.debug(f'TreeShap will be started for {"validation" if on_validation else "training"}, with background data from {"validation" if not bg_from_trainging else "training"}, event sampling is {sample}')
+    # Use similar setup as fit_predict_evaluate, with an inner_func that is potentially called multiple times
+    def inner_func(model, X_train, y_train, X_val: pd.DataFrame, y_val: pd.Series) -> pd.DataFrame:
+        """
+        Will return a dataframe with the dimensions of X_train or X_val (depending on 'on_validation' argument
+        """
+        model.fit(X = X_train, y = y_train)
+        if bg_from_training:
+            X_bg_set, y_bg_set =  X_train, y_train
+        else:
+            X_bg_set, y_bg_set = X_val, y_val
+        if sample == 'standard':
+            background = shap.maskers.Independent(X_bg_set, max_samples = max_samples)
+        elif sample == 'negative':
+            background = shap.maskers.Independent(X_bg_set.loc[~y_bg_set,:], max_samples = max_samples)
+        else:
+            background = shap.maskers.Independent(X_bg_set.loc[y_bg_set,:], max_samples = max_samples)
         
+        explainer = shap.TreeExplainer(model = model, data = background, feature_perturbation = 'interventional', **explainer_kwargs)
+
+        shap_values = explainer.shap_values(X_val if on_validation else X_train) # slow. Outputs a numpy ndarray or a list of them when classifying. We need to add columns and indices
+        if isinstance(model, RandomForestClassifier):
+            shap_values = shap_values[model.classes_.tolist().index(True)] # Only the probabilities for the positive case
+        return pd.DataFrame(shap_values, columns = X_val.columns if on_validation else X_train.columns, index = X_val.index if on_validation else X_train.index)
+
+    if (X_val is None) or (y_val is None):
+        f = crossvalidate(n_folds = n_folds, split_on_year = split_on_year)(inner_func)
+        return f(model = model, X_in = X_in, y_in = y_in) # Conversion of kwargs from X_in/y_in to X_train/y_train and X_val/y_val happens inside the decorating wrapper function
+    else:
+        return inner_func(model = model, X_train = X_in, y_train = y_in, X_val = X_val, y_val = y_val) 
 
 if __name__ == '__main__':
     from scipy.signal import detrend
-    #Y_path = '/nobackup_1/users/straaten/spatcov/response.multiagg.trended.parquet'
-    #X_path = '/nobackup_1/users/straaten/spatcov/precursor.multiagg.parquet'
+    Y_path = '/nobackup_1/users/straaten/spatcov/response.multiagg.trended.parquet'
+    X_path = '/nobackup_1/users/straaten/spatcov/precursor.multiagg.parquet'
     #Y_path = '/scistor/ivm/jsn295/clustertest_roll_spearman_varalpha/response.multiagg.trended.parquet'
     #X_path = '/scistor/ivm/jsn295/clustertest_roll_spearman_varalpha/precursor.multiagg.parquet'
     #Y_path = '/scistor/ivm/jsn295/clusterpar3_roll_spearman_varalpha/response.multiagg.trended.parquet'
     #X_path = '/scistor/ivm/jsn295/clusterpar3_roll_spearman_varalpha/precursor.multiagg.parquet'
-    #y = pd.read_parquet(Y_path).loc[:,(slice(None),1,slice(None))].iloc[:,0] # Only summer
-    #X = pd.read_parquet(X_path).loc[y.index, (slice(None),slice(None),slice(None),0,slice(None),'spatcov')].dropna(axis = 0, how = 'any')
-    ##X = X.sort_index(axis = 1).loc[:,(slice(None),slice(21,22))] # Small subset fit test
-    #y = y.reindex(X.index)
-    #y = pd.Series(detrend(y), index = y.index, name = y.name) # Also here you see that detrending improves Random forest performance a bit
-    #y = y > y.quantile(0.8)
+    y = pd.read_parquet(Y_path).loc[:,(slice(None),7,slice(None))].iloc[:,0] # Only summer
+    X = pd.read_parquet(X_path).loc[y.index, (slice(None),slice(None),slice(None),-21,slice(None),'spatcov')].dropna(axis = 0, how = 'any')
+    #X = X.sort_index(axis = 1).loc[:,(slice(None),slice(21,22))] # Small subset fit test
+    y = y.reindex(X.index)
+    y = pd.Series(detrend(y), index = y.index, name = y.name) # Also here you see that detrending improves Random forest performance a bit
+    y = y > y.quantile(0.8)
 
     # Testing cross validation split on_year vs not on_year
     # Validation folds should be distinc years
@@ -291,7 +330,8 @@ if __name__ == '__main__':
     #f2(model = None, X_in = X, y_in = y)
 
     # Testing a classifier
-    #r2 = RandomForestClassifier(max_depth = 5, n_estimators = 1500, min_samples_split = 20, max_features = 0.15, n_jobs = 20) # Balanced class weight helps a lot.
+    r2 = RandomForestClassifier(max_depth = 5, n_estimators = 1500, min_samples_split = 20, max_features = 0.15, n_jobs = 7) # Balanced class weight helps a lot.
+    shappies = compute_forest_shaps(r2, X, y, on_validation = True, bg_from_training = True, sample = 'standard', n_folds = 3, split_on_year = True)
     #test = fit_predict(r2, X, y, n_folds = 5) # evaluate_kwds = dict(scores = [brier_score_loss,log_loss], score_names = ['bs','ll'])
     #test.index = test.index.droplevel(0)
     #data = np.stack([y.values,test.values], axis = -1)
