@@ -279,7 +279,7 @@ def compute_forest_shaps(model: Callable, X_in, y_in, X_val = None, y_val = None
         """
         model.fit(X = X_train, y = y_train)
         if bg_from_training:
-            X_bg_set, y_bg_set =  X_train, y_train
+            X_bg_set, y_bg_set = X_train, y_train
         else:
             X_bg_set, y_bg_set = X_val, y_val
         if sample == 'standard':
@@ -294,7 +294,10 @@ def compute_forest_shaps(model: Callable, X_in, y_in, X_val = None, y_val = None
         shap_values = explainer.shap_values(X_val if on_validation else X_train) # slow. Outputs a numpy ndarray or a list of them when classifying. We need to add columns and indices
         if isinstance(model, RandomForestClassifier):
             shap_values = shap_values[model.classes_.tolist().index(True)] # Only the probabilities for the positive case
-        return pd.DataFrame(shap_values, columns = X_val.columns if on_validation else X_train.columns, index = X_val.index if on_validation else X_train.index)
+            explainer.expected_value = explainer.expected_value[model.classes_.tolist().index(True)] # Base probability / frequency (potentially through a link function) according to the background data. This plus the average shap sum should add up to the climatological probability
+        frame = pd.DataFrame(shap_values, columns = X_val.columns if on_validation else X_train.columns, index = X_val.index if on_validation else X_train.index)
+        frame['expected_value'] = explainer.expected_value # Will have '' for all, except the zeroth, level of the column multiindex
+        return frame 
 
     if (X_val is None) or (y_val is None):
         f = crossvalidate(n_folds = n_folds, split_on_year = split_on_year)(inner_func)
