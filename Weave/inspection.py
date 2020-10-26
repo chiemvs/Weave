@@ -8,8 +8,12 @@ import warnings
 import itertools
 import numpy as np
 import pandas as pd
+import xarray as xr
+import matplotlib.pyplot as plt
 from pathlib import Path
 from typing import Union
+
+from .inputoutput import Reader
 
 def scale_high_to_high(series: pd.Series, fill_na: bool = False):
     """
@@ -94,6 +98,7 @@ class ImportanceData(object):
         if self.df.index.names.count('separation') > 1: # Remove first separation level if it is in there twice
             self.df.index = self.df.index.droplevel(level = self.df.index.names.index('separation'))
         if X_too or self.is_shap:
+            assert not inputpath is None, 'For X_too (automatic with shap) please supply an inputpath'
             X_path = list(inputpath.glob('precursor.multiagg.parquet'))[0]
             self.X = pd.read_parquet(X_path).T 
         if self.is_shap:
@@ -167,15 +172,90 @@ class ImportanceData(object):
         self.df.name = 'avgabsshap' 
         self.df = self.df.to_frame()
 
+class MapInterface(object):
+    """
+    Class to couple (i.e. map) importance values to their geographical regions
+    cluster arrays are searchable for variable/timeagg/lag combinations
+    perhaps I want to cache these things in some internal datastructure?
+    also have an efficient mapping to xarray?
+    """
+
+    def __init__(self, corclustpath: Path) -> None:
+        self.basepath = corclustpath
+
+    def load_one_dataset(self, variable: str, timeagg: int) -> None:
+        """
+        Load one clustid file (multi-lag) into the internal structure 
+        Replaces lag with the separation axis (this matches across timescales)
+        """
+        path = self.basepath / '.'.join([variable,str(timeagg),'corr','nc']) # e.g. clustertest_roll_spearman_varalpha/sst_nhplus.31.corr.nc
+        ds = xr.open_dataset(path, decode_times = False) # Not using my own Reader (only handles one var)
+        ds.coords.update({'separation': ds.coords['lag'].astype(int) + timeagg, 'timeagg':timeagg}) # create an alternative set of labels for the lag axis, these should match over the timescales
+        ds = ds.swap_dims({'lag':'separation'}).drop('lag')[{'separation':slice(None,0,-1)}] # We want to drop non-matching lag. And deselect the simulataneous field (positive separation, zero lag)
+        if not hasattr(self, variable): # Then we put the array in place
+            setattr(self, variable, ds)         
+        else: # This might become quite inefficient when in the end every timeagg is needed. But it can be quite efficient when only one thing is needed
+            setattr(self, variable, xr.concat([getattr(self,variable), ds], dim = 'timeagg')) 
+
+
+def dotplot(df: pd.Series, custom_order: list = None, sizescaler = 50, alphascaler = 1, nlegend_items = 4):
+    """
+    Takes a (scaled) importance df series (single variable)
+    creates one panel per variable. (Custom order is possible, but variable names have to match exactly)
+    the frame should have either a single separation (x axis becomes the respagg)
+    or it has a single respagg (x axis becomes separation) 
+    Both the size and alpha of the dots are scaled to importance (extra argument for alpha is scaler)
+    if nlegend_items == 0 then no legend will be made
+    """
+    assert not 'clustid' in df.index.names, 'Clustid index should be reduced before plotting. Otherwise this results in stacked dots'
+    y_var = 'timeagg'
+    x_vars = ['separation','respagg']
+    def get_val_len(name):
+        vals = df.index.get_level_values(name).unique().values.tolist()
+        return pd.Series([name, vals, len(vals)], index = ['name','values','len'])
+    x_vars = pd.DataFrame([get_val_len(s) for s in x_vars], index = x_vars)
+    assert (1 in x_vars['len'].values),'this type of dotplot requires an importance df with single respagg or single separation'
+    unique_var = x_vars.loc[x_vars['len'].values == 1, 'name'][0]
+    x_var = x_vars.loc[x_vars['len'].values != 1, 'name'][0] 
+    imp_var = df.name # The name of the importance variable, like multipass rank or globalshap
+    title = f"{unique_var} : {x_vars.loc[unique_var,'values'][0]}, {imp_var}"
+    logging.debug(f'dotplot called, with {x_var} on the x-axis, now to determine the variables per panel') 
+    if custom_order is None:
+        custom_order = df.index.get_level_values('variable').unique().sort_values()
+    
+    max_per_row = 3 # Maximum amount of panels per row
+    nrows = int(np.ceil(len(custom_order)/max_per_row))
+    ncols = min(len(custom_order),max_per_row)
+    fig, axes = plt.subplots(ncols = ncols, nrows = nrows, squeeze = False, figsize = (4*ncols,3.5 * nrows), sharex = True, sharey = True)
+    plotdf = df.reset_index([y_var,x_var], name = imp_var) # We need the x and y values easily accesible
+    global_min = plotdf[imp_var].max() # Needs updating to the selected variables
+    global_max = plotdf[imp_var].min() 
+    for i, variable in enumerate(custom_order):
+        paneldf = plotdf.loc[df.index.get_loc_level(key = variable, level = 'variable')[0],:] # Nice, now you don't have to know where in the levels 'variable' is to match the amount of required slice(None) in the slicing tuple
+        global_min = min(global_min, paneldf[imp_var].min())
+        global_max = max(global_max, paneldf[imp_var].max())
+        rgba_colors = np.zeros((len(paneldf),4),dtype = 'float64')
+        rgba_colors[:,0] = 1 # Makes it red
+        rgba_colors[:,-1] = paneldf.loc[:,imp_var] * alphascaler # first three columns: rgb color values, 4th one: alpha
+        ax = axes[int(np.ceil((i+1)/max_per_row)) - 1,(i % max_per_row)]
+        ax.scatter(x = paneldf[x_var], y = paneldf[y_var], s = paneldf[imp_var] * sizescaler, color = rgba_colors)
+        if (i % max_per_row) == 0:
+            ax.set_ylabel('important timeagg [days]')
+        if i >= (len(custom_order) - max_per_row):
+            ax.set_xlabel(f'{x_var} [days]')
+        ax.set_title(f'var: {variable[:8]}')
+    fig.suptitle(title)
+    # Setting up a custom legend (need to hand make the alpha/size of the labels) based on min/max of the selected variables
+    if nlegend_items >= 1:
+        imprange = np.round(np.linspace(global_min, global_max, num = nlegend_items), 3)
+        items = [None] * len(imprange)
+        for j, impval in enumerate(np.linspace(global_min, global_max, num = nlegend_items)):
+            items[j] = plt.scatter([],[], s = impval * sizescaler, color = [1,0,0,impval*alphascaler])
+        axes[-1,0].legend(items,imprange)
+    return fig, axes
+
+
+def mapplot(df):
+    pass
 # Think up an interface to clusterids/correlation patterns from a basedir? opening in parallel, what takes the time?
 
-if __name__ == '__main__':
-    perm = ImportanceData(Path('/scistor/ivm/jsn295/importance_spatcov_q08_nf5'), 7, -31) 
-    perm.load_data()
-    shap = ImportanceData(Path('/scistor/ivm/jsn295/shaptest_negative_train'), [7], [-1,-21,-31]) 
-    shap.load_data(inputpath = Path('/scistor/ivm/jsn295/clusterpar3_roll_spearman_varalpha'), y_too = True)
-    # Example of scaling the permutation importances as I did
-    #perm.scale_within(fill_na = True) # Multirank score remains useless as always
-    #perm.reduce_over()
-
-    # Want e.g. to map global shap and perm imp dataframe selections to clustids
