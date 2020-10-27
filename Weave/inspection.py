@@ -182,6 +182,31 @@ class MapInterface(object):
 
     def __init__(self, corclustpath: Path) -> None:
         self.basepath = corclustpath
+        self.presentvars = []
+
+    def get_field(self, variable: str, timeagg: int, separation: int, what: str = 'clustid') -> xr.DataArray:
+        """
+        Extracts and returns one (lat/lon) array from the dataset
+        'what' denotes the array to get: possibilities are clustid and correlation
+        """
+        if not hasattr(self, variable):
+            self.load_one_dataset(variable = variable, timeagg = timeagg)
+        else:
+            da = getattr(self, variable)
+            if not timeagg in da.coords['timeagg']:
+                self.load_one_dataset(variable = variable, timeagg = timeagg) # da needs to be reloaded
+        # a problem arises with da[{'timeagg':timeagg,'separation':separation}] because separation (negative) is interpreted as positional arguments not a label value
+        da = getattr(self, variable)[what].sel(timeagg = timeagg, separation = separation)
+        return da
+
+    def cache_everything(self) -> None:
+        """
+        Browses the basepath for correlation files. Loads them all as attributes
+        """
+        files = self.basepath.glob('*.corr.nc') 
+        for filepath in files:
+            variable, timeagg = filepath.parts[-1].split('.')[:2]
+            self.load_one_dataset(variable = variable, timeagg = int(timeagg))
 
     def load_one_dataset(self, variable: str, timeagg: int) -> None:
         """
@@ -192,10 +217,65 @@ class MapInterface(object):
         ds = xr.open_dataset(path, decode_times = False) # Not using my own Reader (only handles one var)
         ds.coords.update({'separation': ds.coords['lag'].astype(int) + timeagg, 'timeagg':timeagg}) # create an alternative set of labels for the lag axis, these should match over the timescales
         ds = ds.swap_dims({'lag':'separation'}).drop('lag')[{'separation':slice(None,0,-1)}] # We want to drop non-matching lag. And deselect the simulataneous field (positive separation, zero lag)
+        ds = ds.expand_dims('timeagg')
         if not hasattr(self, variable): # Then we put the array in place
             setattr(self, variable, ds)         
+            self.presentvars.append(variable)
+            logging.debug(f'{variable} was not yet present, placed as a new attribute for timeagg {timeagg}')
         else: # This might become quite inefficient when in the end every timeagg is needed. But it can be quite efficient when only one thing is needed
             setattr(self, variable, xr.concat([getattr(self,variable), ds], dim = 'timeagg')) 
+            logging.debug(f'{variable} was present, concatenated timeagg {timeagg} to existing')
+
+    def map_to_fields(self, imp: pd.Series, remove_unused: bool = True) -> tuple:
+        """
+        Mapping a selection of properly indexed importance data to the clustids
+        associated to the variables/timeaggs/separations 
+        it finds the unique groups. attemps mapping
+        respagg does not play any role (not a property of input)
+        returns a multiindex for the groups and a list with the filled clustid fields
+        """
+        assert 'clustid' in imp.index.names, 'mapping to fields by means of clustid, should be present in index, not be reduced over'
+        def map_to_field(impvals: pd.Series, variable: str, timeagg: int, separation: int, remove_unused: bool) -> xr.DataArray:
+            """ 
+            does a single field. for all unique non-nan clustids in the field
+            it calls a boolean comparison. Values not belonging are kept 
+            the ones belonging are set to the importance is found in impvals
+            if not found (and remove_unused) then it is set to nan. So visually clusters can disappear
+            The only way this repeated call can go wrong is if 
+            the assigned importance has the exact value of a clustid integer called later
+            """
+            logging.debug(f'attempt field read and importance mapping for {variable}, timeagg {timeagg}, separation {separation}')
+            clustidmap = self.get_field(variable = variable, timeagg = timeagg, separation = separation, what = 'clustid').copy() # Copy because replacing values. Don't want that to happen to our cached dataset
+            ids_in_map = np.unique(clustidmap) # still nans possible
+            ids_in_map = ids_in_map[~np.isnan(ids_in_map)].astype(int) 
+            ids_in_imp = impvals.index.get_level_values('clustid')
+            assert len(ids_in_imp) <= len(ids_in_map), 'importance series should not have more clustids than are contained in the corresponding map field'
+            for clustid in ids_in_map:
+                if clustid in ids_in_imp:
+                    clustidmap = clustidmap.where(clustidmap != clustid, other = impvals.iloc[ids_in_imp == clustid][0]) # Boolean statement is where the values are maintaned. Other states where (if true) the value is taken from
+                elif remove_unused:
+                    clustidmap = clustidmap.where(clustidmap != clustid, other = np.nan)
+                else:
+                    pass
+            clustidmap.name = impvals.name
+            return clustidmap 
+
+        grouped = imp.groupby(['variable','timeagg','separation']) # Discover what is in the imp series
+        results = [] 
+        keys = [] 
+        for key, series in grouped: # key tuple is composed of (variable, timeagg, separation)
+            results.append(map_to_field(series, *key, remove_unused = remove_unused))
+            keys.append(key) 
+        keys = pd.MultiIndex.from_tuples(keys, names = ['variable','timeagg','separation'])
+        return keys, results
+
+            
+
+            
+
+
+
+
 
 
 def dotplot(df: pd.Series, custom_order: list = None, sizescaler = 50, alphascaler = 1, nlegend_items = 4):
