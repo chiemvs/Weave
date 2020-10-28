@@ -3,6 +3,7 @@ Structure for opening and wrangling the output
 of permutation importance and shapley model interpretation
 And to prepare for visualization
 """
+import os
 import logging
 import warnings
 import itertools
@@ -11,9 +12,9 @@ import pandas as pd
 import xarray as xr
 import matplotlib.pyplot as plt
 from pathlib import Path
-from typing import Union
+from typing import Union, List, Tuple
 
-from .inputoutput import Reader
+from .processing import TimeAggregator
 
 def scale_high_to_high(series: pd.Series, fill_na: bool = False):
     """
@@ -172,16 +173,33 @@ class ImportanceData(object):
         self.df.name = 'avgabsshap' 
         self.df = self.df.to_frame()
 
+class FacetMapResult(object):
+    """
+    The facetmapresults just is a consistent wrapping that is accepted by the mapplot function below
+    The result is returned from a call to some mapinterface methods.
+    columnkeys could be absent, in that case the listofarrays is not nested (for instance, just many shapley combinations mapped to clusters)
+    However it can also be present: e.g. the different types of data with get_anom, in that case the listofarrays is nested row-major
+    """
+    def __init__(self, rowkeys, columnkeys, listofarrays):
+        self.rowkeys = rowkeys
+        self.columnkeys = columnkeys
+        self.listofarrays = listofarrays
+
 class MapInterface(object):
     """
     Class to couple (i.e. map) importance values to their geographical regions
     cluster arrays are searchable for variable/timeagg/lag combinations
     perhaps I want to cache these things in some internal datastructure?
-    also have an efficient mapping to xarray?
+    It provides a way to calculated and display the anomaly and correlation patterns
+    related to important variables at a certain timestep
     """
 
-    def __init__(self, corclustpath: Path) -> None:
+    def __init__(self, corclustpath: Path, anompath: Path = Path(os.path.expanduser('~/processed/'))) -> None:
+        """
+        Default for anompath. Usually does not vary. corclustpath does (depending on clustering parameters and correlation measure)
+        """
         self.basepath = corclustpath
+        self.anompath = anompath
         self.presentvars = []
 
     def get_field(self, variable: str, timeagg: int, separation: int, what: str = 'clustid') -> xr.DataArray:
@@ -226,7 +244,7 @@ class MapInterface(object):
             setattr(self, variable, xr.concat([getattr(self,variable), ds], dim = 'timeagg')) 
             logging.debug(f'{variable} was present, concatenated timeagg {timeagg} to existing')
 
-    def map_to_fields(self, imp: pd.Series, remove_unused: bool = True) -> tuple:
+    def map_to_fields(self, imp: pd.Series, remove_unused: bool = True) -> FacetMapResult:
         """
         Mapping a selection of properly indexed importance data to the clustids
         associated to the variables/timeaggs/separations 
@@ -235,6 +253,7 @@ class MapInterface(object):
         returns a multiindex for the groups and a list with the filled clustid fields
         """
         assert 'clustid' in imp.index.names, 'mapping to fields by means of clustid, should be present in index, not be reduced over'
+        assert isinstance(imp, pd.Series), 'Needs to be a series (preferably with meaningful name) otherwise indexing will fail'
         def map_to_field(impvals: pd.Series, variable: str, timeagg: int, separation: int, remove_unused: bool) -> xr.DataArray:
             """ 
             does a single field. for all unique non-nan clustids in the field
@@ -267,15 +286,62 @@ class MapInterface(object):
             results.append(map_to_field(series, *key, remove_unused = remove_unused))
             keys.append(key) 
         keys = pd.MultiIndex.from_tuples(keys, names = ['variable','timeagg','separation'])
-        return keys, results
+        return FacetMapResult(keys, None, results)
 
-            
+    def get_anoms(self, imp: Union[pd.Series, pd.DataFrame], timestamp: pd.Timestamp = None, mask_with_clustid: bool = True, correlation_too: bool = True) -> FacetMapResult:
+        """
+        Similar to map_to_fields this method accepts properly indexed importance values 
+        [variable, timeagg, separation] should be in the index.
+        For all present combinations it creates the anomaly field by aggregating the correct slice of daily anoms
+        The slice is determined by the single! timestamp in the importance dataframe column
+        Or by the pandas timestamp given manually. The timestamp is in terms of response time
+        Has the possibility to also return the corresponding correlation pattern as a differnt array, both potentially masked with the clustids. The method will return those too.
+        Returns a row major list of xarray objects [[var1_anom,var1_corr,var1_clust],[var2,...]]
+        Indexed by row with the pd.MultiIndex, and by column with the pd.Index (length depends on whether correlation_too and clustid_too)
+        """
+        if timestamp is None:
+            assert 'time' in imp.columns.names and len(imp.columns) == 1, 'determination of response timestamp (for which anoms are sought) requires time to be present as a single column, if timestamp is not given as an argument'
+            timestamp = imp.columns.get_level_values('time')[0] 
 
-            
+        def get_anom(variable: str, timeagg: int, separation: int) -> xr.DataArray:
+            """
+            Searches the processed data directory. These data are still daily (not time aggregated at all) 
+            I would need to aggregate only a slice. 
+            The timestamp is at response time (left stamped regardless of respagg)
+            So unfortunately we need some (hard)coded time axis math here.
+            the timeaggregator does left-stamping, we need to load {timeagg} days, ending before / not including {separation} days before the timestamp  
+            option to mask the anomalie field by the clustids
+            """
+            end = timestamp - pd.Timedelta(-separation + 1, unit = 'days') # +1 because for separation (gapsize) = 0 we want the adjacent, and -separation because negatively oriented
+            start = end - pd.Timedelta(timeagg - 1, unit = 'days') # we need -1 extra days to obtain the disired timeagg because the end is inclusive
+            input_range = pd.date_range(start, end, freq = 'D')
+            datapath = list(self.anompath.glob(f'{variable}.anom.nc'))[0]
+            data = xr.open_dataarray(datapath, decode_times = True).sel(time = input_range)
+            logging.debug(f'Precursor anomaly field requested for {timestamp}. At separation {separation} and timeagg {timeagg} this amounts to daily data from {input_range}. Proceeding to aggregation')
+            t = TimeAggregator(datapath, data = data, share_input = True) # datapath is actually ignored
+            anom_field = t.compute(nprocs = 1, ndayagg = timeagg, rolling = False) # Only one process is needed (as we aggregate only one slice). Because the slice is the exact right length, rolling could be both True or False, both result in a time dim of length 1
+            return anom_field
 
+        grouped = imp.groupby(['variable','timeagg','separation']) # Discover what is in the imp series
+        results = [] 
+        rowkeys = [] 
+        columnkeys = ['anom', 'clustid'] 
+        if correlation_too:
+            columnkeys.insert(1,'correlation') # placed at first index, because like the anom (0) it will potentially be masked, and because like clustid (-1) it can be read with self.get_field
+        for key, _ in grouped: # key tuple is composed of (variable, timeagg, separation)
+            within_group_results = [None] * len(columnkeys)  # Will contain the anoms potentially more (forms one row in the return list) 
+            within_group_results[0] = get_anom(*key) # Special function. For correlation and clustid we already have self.get_field
+            for extra in columnkeys[1:]:
+                within_group_results[columnkeys.index(extra)] = self.get_field(*key, what = extra)
+            if mask_with_clustid:
+                for index in range(len(within_group_results[:-1])): # Clustid is excluded, cannot be masked with itself
+                    within_group_results[index] = within_group_results[index].where(~within_group_results[-1].isnull(), other = np.nan) # Preserve where a cluster is found. np.nan otherwise
 
-
-
+            results.append(within_group_results)
+            rowkeys.append(key) 
+        rowkeys = pd.MultiIndex.from_tuples(rowkeys, names = ['variable','timeagg','separation'])
+        columnkeys = pd.Index(columnkeys)
+        return FacetMapResult(rowkeys, columnkeys, results)
 
 
 def dotplot(df: pd.Series, custom_order: list = None, sizescaler = 50, alphascaler = 1, nlegend_items = 4):
@@ -335,7 +401,44 @@ def dotplot(df: pd.Series, custom_order: list = None, sizescaler = 50, alphascal
     return fig, axes
 
 
-def mapplot(df):
-    pass
-# Think up an interface to clusterids/correlation patterns from a basedir? opening in parallel, what takes the time?
+def mapplot(mapresult: FacetMapResult, wrap_per_row: int = 1, over_columns: str = None):
+    """
+    No functionality to subset-select from the mapresult. This can be achieved by inputting a smaller dataframe/series to MapInterface methods
+    For the case of absent columnkeys there is the option to plot vs a level in the rowindex
+    otherwise the panels are distributed according wrap_per_row
+    tuples are immutable which is the reason that FacetMapresult is not a named-tuple
+    """
+    if mapresult.columnkeys is None: # Then the option to check over_columns. Nevertheless we need to create a nesting ourselves
+        assert not isinstance(mapresult.listofarrays[0], list), 'We should not be dealing with a nested list when columnkeys are absent'
+        if over_columns is None:
+            if wrap_per_row > 1:
+                warnings.warn('Rowkeys are thinned, so you could be losing some information here if not also present in the xarray name or attributes')
+            listofarrays = []
+            rowkeys = mapresult.rowkeys[list(range(0,len(mapresult.listofarrays),wrap_per_row))]
+            columnkeys = None
+            for index in range(0,len(mapresult.listofarrays),wrap_per_row):
+                listofarrays.append(mapresult.listofarrays[index:(index+wrap_per_row)]) # Slice is allowed to overshoot which is good
+            #mapresult.listofarrays = [mapresult.listofarrays[index:(index+wrap_per_row)] for index in range(0,len(mapresult.listofarrays),wrap_per_row)] # Slice is allowed to overshoot which is good
+        else: # makes nested, but also set the columnkeys
+            dummyframe = pd.Series(data = np.nan, index = mapresult.rowkeys).unstack(over_columns)
+            rowkeys = dummyframe.index # Not overwritng we still need them to search, but also immutable because it is a tuple
+            columnkeys = dummyframe.columns # Not overwritng, we still need them to search
+            listofarrays = []
+            for rowkey in rowkeys: # Nested loop (Building the new nested list row-major
+                rowlist = [] 
+                for columnkey in columnkeys:
+                    originalkey = list(rowkey)
+                    originalkey.insert(mapresult.rowkeys.names.index(over_columns),columnkey) # insert the column value at the right level
+                    originalindex = mapresult.rowkeys.get_loc(tuple(originalkey))  
+                    rowlist.append(mapresult.listofarrays[originalindex])
+                listofarrays.append(rowlist)
+        # Now we can reset
+        mapresult.listofarrays = listofarrays
+        mapresult.columnkeys = columnkeys
+        mapresult.rowkeys = rowkeys
 
+    
+    nrows = len(mapresult.listofarrays)
+    ncols = len(mapresult.listofarrays[0]) 
+
+# Function for a bar plot / beeswarm plot for quick global or local importance without geographical reference and collapsed column names?

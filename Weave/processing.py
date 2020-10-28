@@ -210,8 +210,8 @@ class TimeAggregator(Computer):
     For non-rolling aggregation it is possible to supply a first day
     This allows a full overlap with another block-aggregated time series
     """
-    def __init__(self, datapath: Path, group: str = None, ncvarname: str = None, share_input: bool = False, reduce_input: bool = False, reduce_dtype: bool = False, region: Region = None):
-        Computer.__init__(self, datapath = datapath, group = group, ncvarname = ncvarname, share_input = share_input, reduce_input = reduce_input, reduce_dtype = reduce_dtype, region = region)
+    def __init__(self, datapath: Path, group: str = None, ncvarname: str = None, share_input: bool = False, reduce_input: bool = False, reduce_dtype: bool = False, region: Region = None, data: xr.DataArray = None):
+        Computer.__init__(self, datapath = datapath, group = group, ncvarname = ncvarname, share_input = share_input, reduce_input = reduce_input, reduce_dtype = reduce_dtype, region = region, data = data)
         assert (np.diff(self.coords['time']) == np.timedelta64(1,'D')).all(), "Time axis should be continuous daily to be allegible for aggregation"
         # Preparing and sharing the output
         self.outarray = mp.RawArray(get_corresponding_ctype(self.dtype), size_or_initializer=self.size)
