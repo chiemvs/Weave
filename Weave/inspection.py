@@ -320,7 +320,7 @@ class MapInterface(object):
             logging.debug(f'Precursor anomaly field requested for {timestamp}. At separation {separation} and timeagg {timeagg} this amounts to daily data from {input_range}. Proceeding to aggregation')
             t = TimeAggregator(datapath, data = data, share_input = True) # datapath is actually ignored
             anom_field = t.compute(nprocs = 1, ndayagg = timeagg, rolling = False) # Only one process is needed (as we aggregate only one slice). Because the slice is the exact right length, rolling could be both True or False, both result in a time dim of length 1
-            return anom_field
+            return anom_field.squeeze() # Get rid of the dimension of length 1 (timestamp becomes dimensionless coord
 
         grouped = imp.groupby(['variable','timeagg','separation']) # Discover what is in the imp series
         results = [] 
@@ -437,8 +437,28 @@ def mapplot(mapresult: FacetMapResult, wrap_per_row: int = 1, over_columns: str 
         mapresult.columnkeys = columnkeys
         mapresult.rowkeys = rowkeys
 
-    
     nrows = len(mapresult.listofarrays)
     ncols = len(mapresult.listofarrays[0]) 
 
+    fig, axes = plt.subplots(nrows = nrows, ncols = ncols, squeeze = False, sharex = True, sharey = True, figsize = (4*ncols,3.5 * nrows))
+    for i, rowlist in enumerate(mapresult.listofarrays):
+        for j, array in enumerate(rowlist):
+            ax = axes[i,j]
+            armin = array.min()
+            armax = array.max()
+            absmax = max(abs(armin),armax)
+            if armin < 0 and armax > 0: # If positive and negative values are present then we want to center.
+                cmap = plt.get_cmap('RdBu_r')
+                im = ax.pcolormesh(array, vmin = -absmax, vmax = absmax, cmap = cmap) 
+            else:
+                im = ax.pcolormesh(array, vmin = armin, vmax = armax) 
+            cbar = fig.colorbar(im, ax = ax)
+            cbar.set_label(f'{array.name} [{array.units}]')
+            ax.set_title(array._title_for_slice())
+            if j == 0:
+                ax.set_ylabel(f'{mapresult.rowkeys[i]}')
+    return fig, axes
+
 # Function for a bar plot / beeswarm plot for quick global or local importance without geographical reference and collapsed column names?
+def barplot():
+    pass
