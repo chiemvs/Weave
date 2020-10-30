@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Union, List, Tuple
 
 from .processing import TimeAggregator
+from .utils import collapse_restore_multiindex
 
 def scale_high_to_high(series: pd.Series, fill_na: bool = False):
     """
@@ -460,5 +461,34 @@ def mapplot(mapresult: FacetMapResult, wrap_per_row: int = 1, over_columns: str 
     return fig, axes
 
 # Function for a bar plot / beeswarm plot for quick global or local importance without geographical reference and collapsed column names?
-def barplot():
+def barplot(impdf: Union[pd.Series,pd.DataFrame], n_most_important = 10, ignore_in_names = ['respagg','lag','metric']):
+    """
+    Creates a horizontal barplot with the (scaled) importance of all input variables (single separation/single timeagg) 
+    if a pd.DataFrame with multiple columns is supplied then one bar plot per column (perhaps fold? or sample?) is made
+    The function accepts only one forecasting occasion. so single respagg, separation
+    The ignore_in_names argument is to get more compact plot labels (it are levels dropped from the multiindex of impdf)
+    """
+    assert len(impdf.index.get_level_values('separation').unique()) == 1 and len(impdf.index.get_level_values('respagg').unique()) == 1, 'barplot function can only accept (multicolumn) importances of only one forecasting problem'
+    if isinstance(impdf, pd.Series):
+        impdf = pd.DataFrame(impdf) # Just so we can loop over columns
+    
+    if impdf.columns.nlevels > 1: # Dropping levels on axis = 1 for easier plot titles
+        impdf, oldcolnames = collapse_restore_multiindex(impdf, axis = 1)
+    if impdf.index.nlevels > 1: # Also dropping on axis = 0 
+        impdf, oldrownames = collapse_restore_multiindex(impdf, axis = 0, ignore_level = ignore_in_names)
+
+    ncols = impdf.shape[-1]
+    fig, axes = plt.subplots(nrows = 1, ncols = ncols, squeeze = False, sharex = True, figsize = (4*ncols,4))
+
+    for i, col in enumerate(impdf.columns):
+        sorted_by_col = impdf.loc[:,col].sort_values(ascending = False).iloc[:n_most_important]
+        ax = axes[0,i]
+        ax.barh(range(n_most_important), width = sorted_by_col)
+        ax.set_yticks(range(n_most_important))
+        ax.set_yticklabels(sorted_by_col.index)
+        ax.set_title(col)
+    return fig, axes
+
+
+def scatterplot():
     pass
