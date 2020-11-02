@@ -7,7 +7,10 @@ import numpy as np
 import pandas as pd
 import itertools
 import logging
-import shap
+try:
+    import shap
+except ImportError:
+    pass
 
 from typing import Callable
 from collections import OrderedDict
@@ -66,8 +69,8 @@ def crossvalidate(n_folds: int = 10, split_on_year: bool = False) -> Callable:
             results = []
             k = 0
             for train_index, val_index in kf.split(**kf_kwargs): # This generates integer indices, ultimately pure numpy and slices would give views. No copy of data, better for distributed
-                if isinstance(X_in, pd.DataFrame):
-                    X_train, X_val = X_in.iloc[train_index,:], X_in.iloc[val_index]
+                if isinstance(X_in, (pd.Series,pd.DataFrame)):
+                    X_train, X_val = X_in.iloc[train_index], X_in.iloc[val_index]
                     y_train, y_val = y_in.iloc[train_index], y_in.iloc[val_index]
                 else:
                     X_train, X_val = X_in[train_index,:], X_in[val_index,:]

@@ -16,6 +16,7 @@ from scipy.stats import rankdata, spearmanr, pearsonr, weightedtau, t
 from sklearn.linear_model import LinearRegression
 from sklearn.preprocessing import scale
 from sklearn.calibration import calibration_curve
+from .models import crossvalidate
 
 Region = namedtuple("Region", ["name", "latmax","lonmin", "latmin", "lonmax"])
 
@@ -217,6 +218,21 @@ def spearmanr_wrap(data: np.ndarray) -> tuple:
     wraps scipy pearsonr by decomposing a 2D dataarray (n_obs,[x,y]) into x and y
     """
     return spearmanr(a = data[:,0], b = data[:,1]) 
+
+def spearmanr_cv(n_folds: int, split_on_year: bool = True) -> Callable:
+    """
+    Constructor to supply function that computes correlation only on the training set
+    Wrapping input after crossval into spearmanr, and wrapping output after crossval to array
+    The returned function should be called with X_in and y_in arguments
+    """
+    def wrapper(X_train, y_train, X_val = None, y_val = None) -> pd.Series: # Wrapping input
+        return pd.Series(spearmanr(X_train, y_train))
+    interimfunc = crossvalidate(n_folds = n_folds, split_on_year = split_on_year)(wrapper) 
+    def returnfunc(*args, **kwargs) -> np.ndarray: # Function to modify output to be written to shared array
+        returnframe = interimfunc(*args, **kwargs) # Returns a dataframe
+        return returnframe
+    return returnfunc
+        
 
 def chi(responseseries: xr.DataArray, precursorseries: xr.DataArray, nq: int = 100, qlim: tuple = None, alpha: float = 0.05, trunc: bool = True, full = False) -> tuple:
     """

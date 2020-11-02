@@ -44,6 +44,8 @@ def lag_subset_detrend_associate(spatial_index: tuple):
     full_index = (slice(None),) + spatial_index # Assumes the unlimited time on the first axis
     inarray = np.frombuffer(var_dict['inarray'], dtype = var_dict['dtype']).reshape(var_dict['shape'])[full_index]
     outarray = np.frombuffer(var_dict['outarray'], dtype = var_dict['outdtype']).reshape(var_dict['outshape'])
+    do_crossval = var_dict['do_crossval']
+
     if np.isnan(inarray).all(): # We are dealing with an empty cell
         logging.debug(f'Worker found empty cell at {spatial_index}, returning np.nan')
         out_index = (slice(None),slice(None)) + spatial_index
@@ -53,17 +55,23 @@ def lag_subset_detrend_associate(spatial_index: tuple):
         intimeaxis = var_dict['intimeaxis']
         oriset = xr.DataArray(inarray, dims = ('time',), coords = {'time':intimeaxis})
         subsettimeaxis = var_dict['responseseries'].time
-        # Prepare the computation results. First axis: lags, second axis: [corrcoef, pvalue]
+        # extract some info 
         laglist = var_dict['laglist']
+
         logging.debug(f'Worker starts lagging, detrending and correlating of cell {spatial_index} for lags {laglist}')
         for lag in laglist: # Units is days
             oriset['time'] = intimeaxis - pd.Timedelta(str(lag) + 'D') # Each point in time is assigned to a lagged date
-            combined = np.column_stack((oriset.reindex_like(subsettimeaxis), var_dict['responseseries'])) # We only retain the points assigned to the dates of the response timeseries. Potentially this generates some nans. Namely when the response series extends further than the precursor (ERA5 vs ERA5-land)
-            # Combined is an array (n_obs,2) with zeroth column the precursor (x) and first column the response (y) 
-            combined = combined[~np.isnan(combined[:,0]),:] # Then we only retain non-nan. detrend cant handle them
-            combined[:,0] = detrend(combined[:,0]) # Response was already detrended
-            out_index = (laglist.index(lag), slice(None)) + spatial_index # Remember the shape of (len(lagrange),2) + spatdims 
-            outarray[out_index] = var_dict['asofunc'](combined) # Asofunc should accept 2D data array and return (corr,pvalue)
+            X_set = oriset.reindex_like(subsettimeaxis).dropna(dim = 'time') # We only retain the points assigned to the dates of the response timeseries. Potentially this generates some nans. Namely when the response series extends further than the precursor (ERA5 vs ERA5-land) only retain non_nan because detrend cant handle them
+            X_set.values = detrend(X_set) # Response was already detrended
+            y_set = var_dict['responseseries'].loc[X_set.time] # We want both as matching series
+            # For non-cv asofuncs they operate on dataarrays (n_obs,2) with zeroth column the precursor (x) and first column the response (y), for cv we to provide input and capture output of the crossvalidated function
+            if do_crossval:
+                out_index = None # Different dimensionality of the outarray
+                outarray[out_index] = asofunc(X_in = X_set, y_in = y_set)
+            else:
+                combined = np.column_stack((X_set, y_set)) 
+                out_index = (laglist.index(lag), slice(None)) + spatial_index # Remember the shape of (len(lagrange),2) + spatdims 
+                outarray[out_index] = asofunc(combined) # Asofunc should accept 2D data array and return (corr,pvalue)
 
 class Associator(Computer):
 
