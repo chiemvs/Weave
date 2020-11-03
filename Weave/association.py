@@ -21,7 +21,7 @@ from .processing import Computer
 
 var_dict = {}
 
-def init_worker(inarray, dtype, shape, intimeaxis, responseseries, outarray, outdtype, outshape, laglist, asofunc):
+def init_worker(inarray, dtype, shape, intimeaxis, responseseries, outarray, outdtype, outshape, laglist, asofunc, do_crossval):
     var_dict['inarray'] = inarray
     var_dict['dtype'] = dtype
     var_dict['shape'] = shape
@@ -32,6 +32,7 @@ def init_worker(inarray, dtype, shape, intimeaxis, responseseries, outarray, out
     var_dict['outshape'] = outshape
     var_dict['laglist'] = laglist
     var_dict['asofunc'] = asofunc # Association function defined in utils 
+    var_dict['do_crossval'] = do_crossval
     logging.debug('this initializer has populated a global dictionary')
 
 def lag_subset_detrend_associate(spatial_index: tuple):
@@ -48,7 +49,7 @@ def lag_subset_detrend_associate(spatial_index: tuple):
 
     if np.isnan(inarray).all(): # We are dealing with an empty cell
         logging.debug(f'Worker found empty cell at {spatial_index}, returning np.nan')
-        out_index = (slice(None),slice(None)) + spatial_index
+        out_index = (slice(None),slice(None),slice(None)) + spatial_index
         outarray[out_index] = np.nan # Writes np.nan both for the association strength and the significance.
     else:
         # Now inarray is a one dimensional numpy array, we need the original and series time coordinates to do the lagging
@@ -64,18 +65,17 @@ def lag_subset_detrend_associate(spatial_index: tuple):
             X_set = oriset.reindex_like(subsettimeaxis).dropna(dim = 'time') # We only retain the points assigned to the dates of the response timeseries. Potentially this generates some nans. Namely when the response series extends further than the precursor (ERA5 vs ERA5-land) only retain non_nan because detrend cant handle them
             X_set.values = detrend(X_set) # Response was already detrended
             y_set = var_dict['responseseries'].loc[X_set.time] # We want both as matching series
-            # For non-cv asofuncs they operate on dataarrays (n_obs,2) with zeroth column the precursor (x) and first column the response (y), for cv we to provide input and capture output of the crossvalidated function
+            # For non-cv asofuncs they operate on dataarrays (n_obs,2) with zeroth column the precursor (x) and first column the response (y), for cv we to provide input and capture output of the crossvalidated function, all that should be already in asofunc (like Weave.utils.spearmanr_cv)
+            out_index = (laglist.index(lag), slice(None), slice(None)) + spatial_index # Remember the shape of (len(lagrange),self.n_folds,2) + spatdims. So regardless of crossval at least one fold is mimiced
             if do_crossval:
-                out_index = None # Different dimensionality of the outarray
-                outarray[out_index] = asofunc(X_in = X_set, y_in = y_set)
+                outarray[out_index] = var_dict['asofunc'](X_in = X_set.to_pandas(), y_in = y_set.to_pandas())
             else:
                 combined = np.column_stack((X_set, y_set)) 
-                out_index = (laglist.index(lag), slice(None)) + spatial_index # Remember the shape of (len(lagrange),2) + spatdims 
-                outarray[out_index] = asofunc(combined) # Asofunc should accept 2D data array and return (corr,pvalue)
+                outarray[out_index] = var_dict['asofunc'](combined) # Asofunc should accept 2D data array and return (corr,pvalue)
 
 class Associator(Computer):
 
-    def __init__(self, responseseries: xr.DataArray, data: xr.DataArray, laglist: list, association: Callable) -> None:
+    def __init__(self, responseseries: xr.DataArray, data: xr.DataArray, laglist: list, association: Callable, n_folds: int = None) -> None:
         """
         Is fed with an already loaded data array, this namely is an intermediate timeaggregated array
         Always shares the input array, such that it can be deleted after initialization
@@ -83,6 +83,7 @@ class Associator(Computer):
         laglist is how far to shift the data in number of days. A lag of -10 means that data values of 1979-01-01 are associated to the response values at 1979-01-11
         Choice to supply the function that determines association between two timeseries
         Should return (corr_float, p_value_float)
+        If the association should be computed in cross-val mode (computation on train only) then supply an n_folds parameter (has to match the return size for the decorated association func)
         """
         Computer.__init__(self, share_input=True, data = data) # Fills a shared array at self.inarray
 
@@ -90,11 +91,22 @@ class Associator(Computer):
         self.laglist = laglist
         self.asofunc = association
         self.responseseries = responseseries
-        # For each cell we are going to produce 2 association values, a strength and a significance
-        # for each lag. The dimensions of the outarray therefore become (nlags, 2 ) + spatshape
-        # Which can be too large to handle by return values, therefore we share an outarray
-        self.outshape = (len(self.laglist),2) + self.shape[1:]
-        self.outsize = self.size // self.shape[0] * len(self.laglist) * 2
+        """
+        For each cell we are going to produce 2 association values, a strength and a significance
+        This is done per lag and possibly per fold. 
+        If there are no folds we are going to mimic a single one for consistent amount dimensions in the outarray.
+        The dimensions of the shared outarray therefore become (nlags, nfolds, 2) + spatshape
+        """
+        if n_folds is None:
+            self.n_folds = 1
+            self.do_crossval = False
+            logging.debug('mimicing a fold of size 1. NO cross-validated association computing')
+        else:
+            self.n_folds = n_folds
+            self.do_crossval = True
+            logging.debug(f'found n_folds {n_folds}. Cross-validated association computing')
+        self.outshape = (len(self.laglist),self.n_folds,2) + self.shape[1:]
+        self.outsize = self.size // self.shape[0] * len(self.laglist) * self.n_folds * 2
         self.outdtype = np.dtype(np.float32)
         self.outarray = mp.RawArray(get_corresponding_ctype(self.outdtype), size_or_initializer=self.outsize)
         logging.info(f'Associator placed outarray of dimension {self.outshape} in shared memory')
@@ -106,33 +118,42 @@ class Associator(Computer):
         #self.coordtuples = itertools.product(*spatcoords)
         spatdimlengths = tuple(list(range(length)) for length in self.shape[1:])
         indextuples = itertools.product(*spatdimlengths)
-        with mp.Pool(processes = nprocs, initializer=init_worker, initargs=(self.inarray, self.dtype, self.shape, self.coords['time'], self.responseseries, self.outarray, self.outdtype, self.outshape, self.laglist, self.asofunc)) as pool:
+        with mp.Pool(processes = nprocs, initializer=init_worker, initargs=(self.inarray, self.dtype, self.shape, self.coords['time'], self.responseseries, self.outarray, self.outdtype, self.outshape, self.laglist, self.asofunc, self.do_crossval)) as pool:
             results = pool.map(lag_subset_detrend_associate,indextuples)
 
         # Reconstruction from shared out array
         np_outarray = np.frombuffer(self.outarray, dtype = self.outdtype).reshape(self.outshape) # For shared Ctype arrays
         # We are going to store with dimension (lags, spatdims), either masked or seperate as dataset
         returnshape = list(self.outshape)
-        returnshape.pop(1)
+        returnshape.pop(2) # Popping out the fixed dimension of size 2 (corr, pval) which will collapse to a single masked corr
         logging.info(f'Associator recieved all computed correlations and pvalues and will use those to produce a masked array of shape {returnshape}')
         # Mask the correlation array with the p-values? And record the fraction of cells that became unsignificant
         mask = np.full(returnshape, True, dtype = np.bool) # Everything starts with not-rejected null hyp and masked
-        for lag in self.laglist:
-            pfield = np_outarray[self.laglist.index(lag),1,...]
+        for lagindex, foldindex in itertools.product(range(len(self.laglist)),range(self.n_folds)):
+            pfield = np_outarray[lagindex,foldindex,1,...]
             nonan_indices = np.where(~np.isnan(pfield)) # Tuple with arrays of indices. one array if only 1D, but two in a 2D tuple if two spatial dimensions
             pfield_flat = pfield[nonan_indices].flatten() # As multipletest can only handle 1D p-value arrays, and subsetting to not-nan because we don't want nan to contribute to n_tests
             fracbefore = round((pfield_flat < alpha).sum() / pfield_flat.size , 5)
             reject, pfield_flat, garbage1, garbage2 = multipletests(pfield_flat, alpha = alpha, method = 'fdr_bh', is_sorted = False)
             fracafter = round((pfield_flat < alpha).sum() / pfield_flat.size , 5)
-            mask[(self.laglist.index(lag),) + nonan_indices] = ~reject # First part of this joined tuple is only one number, the index of the current lag in the lagaxis
-            self.attrs.update({f'lag{lag}':f'frac p < {alpha} before: {fracbefore}, after: {fracafter}'})
+            mask[(lagindex,foldindex) + nonan_indices] = ~reject # First part of this joined tuple is only one number, the index of the current lag in the lagaxis
+            if self.do_crossval:
+                self.attrs.update({f'lag{self.laglist[lagindex]}_fold{foldindex}':f'frac p < {alpha} before: {fracbefore}, after: {fracafter}'})
+            else:
+                self.attrs.update({f'lag{self.laglist[lagindex]}':f'frac p < {alpha} before: {fracbefore}, after: {fracafter}'})
             
         # Preparing the to be returned dataarray
-        coords = {'lag':self.laglist}
-        dims = ('lag',) + self.dims[1:]
+        if self.do_crossval:
+            coords = {'lag':self.laglist, 'fold':list(range(self.n_folds))}
+            dims = ('lag','fold') + self.dims[1:]
+            corr = np.ma.masked_array(data = np_outarray[:,:,0,...], mask = mask)
+        else:
+            coords = {'lag':self.laglist}
+            dims = ('lag',) + self.dims[1:]
+            corr = np.ma.masked_array(data = np_outarray[:,:,0,...], mask = mask).squeeze(axis = 1) # Squeezing out the mimiced fold dimension
         for dim in self.dims[1:]:
             coords.update({dim:self.coords[dim]})
-        corr = xr.DataArray(np.ma.masked_array(data = np_outarray[:,0,...], mask = mask), dims = dims, coords = coords, name = 'correlation')
+        corr = xr.DataArray(data = corr, dims = dims, coords = coords, name = 'correlation')
         corr.attrs = self.attrs
         Computer.cleanup(self)
         return corr

@@ -38,7 +38,7 @@ def evaluate(data = None, y_true = None, y_pred = None, scores = [r2_score, mean
         returns.loc[name] = score(y_true, y_pred)
     return returns
 
-def crossvalidate(n_folds: int = 10, split_on_year: bool = False) -> Callable:
+def crossvalidate(n_folds: int = 10, split_on_year: bool = False, sort: bool = True) -> Callable:
     def actual_decorator(func: Callable) -> Callable:
         """
         Manipulates the input arguments of func
@@ -46,7 +46,7 @@ def crossvalidate(n_folds: int = 10, split_on_year: bool = False) -> Callable:
         func should be a function that returns pandas objects
         TODO: remove debugging print statements
         possibility to split cleanly on years. Years are grouped into distinct consecutive groups, such that the amount of groups equals the disered amount of folds.
-        With split on year there is no guarantee of the folds [0 to nfolds-1] to be chronological on the time axis. Therefore a sorting of time index is needed.
+        With split on year there is no guarantee of the folds [0 to nfolds-1] to be chronological on the time axis. Therefore a sorting of time index is needed and can be asked.
         """
         def wrapper(*args, **kwargs) -> pd.Series:
             try:
@@ -76,11 +76,10 @@ def crossvalidate(n_folds: int = 10, split_on_year: bool = False) -> Callable:
                     X_train, X_val = X_in[train_index,:], X_in[val_index,:]
                     y_train, y_val = y_in[train_index], y_in[val_index]
                 kwargs.update({'X_train':X_train, 'y_train':y_train, 'X_val':X_val, 'y_val':y_val})
-                logging.debug(f'fold {k}, kwargs: {kwargs.keys()}, args: {args}')
                 k += 1
                 results.append(func(*args, **kwargs))
             results = pd.concat(results, axis = 0, keys = pd.RangeIndex(n_folds, name = 'fold')) 
-            if split_on_year:
+            if split_on_year and sort:
                 return(results.sort_index(axis = 0, level = -1)) # Lowest level perhaps called time, highest level in the hierarchy has just become fold,
             else:
                 return(results)

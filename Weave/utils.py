@@ -215,22 +215,21 @@ def pearsonr_wrap(data: np.ndarray) -> tuple:
 
 def spearmanr_wrap(data: np.ndarray) -> tuple:
     """
-    wraps scipy pearsonr by decomposing a 2D dataarray (n_obs,[x,y]) into x and y
+    wraps scipy spearmanr by decomposing a 2D dataarray (n_obs,[x,y]) into x and y
     """
     return spearmanr(a = data[:,0], b = data[:,1]) 
 
-def spearmanr_cv(n_folds: int, split_on_year: bool = True) -> Callable:
+def spearmanr_cv(n_folds: int, split_on_year: bool = True, sort = False) -> Callable:
     """
     Constructor to supply function that computes correlation only on the training set
     Wrapping input after crossval into spearmanr, and wrapping output after crossval to array
-    The returned function should be called with X_in and y_in arguments
+    The returned function should be called with X_in and y_in arguments such that those can be filtered from kwargs and supplied as X_train and y_train to the wrapper
     """
-    def wrapper(X_train, y_train, X_val = None, y_val = None) -> pd.Series: # Wrapping input
-        return pd.Series(spearmanr(X_train, y_train))
-    interimfunc = crossvalidate(n_folds = n_folds, split_on_year = split_on_year)(wrapper) 
+    def wrapper(X_train, y_train, X_val, y_val = None) -> pd.Series: # Wrapping input format of pandas to spearmanr
+        return pd.DataFrame([spearmanr(X_train, y_train)], columns = ['corr','pvalue'], index = X_val.index[[0]]) # Returning the start timestamp of the validation fold (later sorted by crossvalidate if split_on_year and sorted are True)
+    interimfunc = crossvalidate(n_folds = n_folds, split_on_year = split_on_year, sort = sort)(wrapper) 
     def returnfunc(*args, **kwargs) -> np.ndarray: # Function to modify output to be written to shared array
-        returnframe = interimfunc(*args, **kwargs) # Returns a dataframe
-        return returnframe
+        return interimfunc(*args, **kwargs) # Returns a dataframe
     return returnfunc
         
 
