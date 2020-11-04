@@ -217,7 +217,7 @@ def spearmanr_wrap(data: np.ndarray) -> tuple:
     """
     wraps scipy spearmanr by decomposing a 2D dataarray (n_obs,[x,y]) into x and y
     """
-    return spearmanr(a = data[:,0], b = data[:,1]) 
+    return spearmanr(a = data[:,0], b = data[:,1])
 
 def spearmanr_cv(n_folds: int, split_on_year: bool = True, sort = False) -> Callable:
     """
@@ -232,6 +232,16 @@ def spearmanr_cv(n_folds: int, split_on_year: bool = True, sort = False) -> Call
         return interimfunc(*args, **kwargs) # Returns a dataframe
     return returnfunc
         
+def spearmanr_par(a: np.ndarray, b: np.ndarray):
+    """
+i   The timeseries can be discontinuous. Lagging by index cannot be done on that timeseries
+    A lagged version should be present in the columns so a_resid = a[:,0] - f(a[:,1])
+    """
+    a_betahat = np.linalg.lstsq(a[:,[1]], a[:,0], rcond = None)[0] # First argument is the condition, second is the dependent
+    a_resid = a[:,0] - np.dot(a[:,[1]], a_betahat)
+    b_betahat = np.linalg.lstsq(b[:,[1]], b[:,0], rcond = None)[0]
+    b_resid = b[:,0] - np.dot(b[:,[1]], b_betahat)
+    return spearmanr(a = a_resid, b = b_resid)
 
 def chi(responseseries: xr.DataArray, precursorseries: xr.DataArray, nq: int = 100, qlim: tuple = None, alpha: float = 0.05, trunc: bool = True, full = False) -> tuple:
     """
