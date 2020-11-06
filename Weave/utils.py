@@ -16,7 +16,6 @@ from scipy.stats import rankdata, spearmanr, pearsonr, weightedtau, t
 from sklearn.linear_model import LinearRegression
 from sklearn.preprocessing import scale
 from sklearn.calibration import calibration_curve
-from .models import crossvalidate
 
 Region = namedtuple("Region", ["name", "latmax","lonmin", "latmin", "lonmax"])
 
@@ -207,36 +206,46 @@ def quick_kendall(data: np.ndarray) -> tuple:
     corr, pval = weightedtau(x = data[:,1], y = data[:,0], rank = None)
     return (corr, 1e-9)
 
-def pearsonr_wrap(data: np.ndarray) -> tuple:
+def prepare_scipy_stats_for_array(func: Callable):
     """
-    wraps scipy pearsonr by decomposing a 2D dataarray (n_obs,[x,y]) into x and y
+    Decorator
+    wraps 2D array input to two 1D arrays. Should be used if you want to apply my bootstrap procedure (requiring a single 2d dataarray) to a scipy stats stats function like pearsonr 
+    Because we bootstrap we want to retain only the corr, not the pval
     """
-    return pearsonr(x = data[:,0], y = data[:,1]) 
+    def decorated_func(*args,**kwargs):
+        """
+        Bootstrap supplies data as first argument
+        """
+        return func(args[0][:,0], args[0][:,1], *args[1:], **kwargs)[0]
+    return decorated_func
 
-def spearmanr_wrap(data: np.ndarray) -> tuple:
-    """
-    wraps scipy spearmanr by decomposing a 2D dataarray (n_obs,[x,y]) into x and y
-    """
-    return spearmanr(a = data[:,0], b = data[:,1])
 
-def spearmanr_cv(n_folds: int, split_on_year: bool = True, sort = False) -> Callable:
+def prepare_scipy_stats_for_crossval(func) -> Callable:
     """
-    Constructor to supply function that computes correlation only on the training set
-    Wrapping input after crossval into spearmanr, and wrapping output after crossval to array
-    The returned function should be called with X_in and y_in arguments such that those can be filtered from kwargs and supplied as X_train and y_train to the wrapper
+    Decorator to ready a scipy stats function (returning (cor,pval) tuple) 
+    for crossvalidation. This means readying it to accept 4 dataframe/array arguments
+    Then compute only on the training data, and return a pandas dataframe (such that crossvalidation can piece the ones of different folds together)
+    The returned function should again afterwards be decorated with crossvalidate, and after that be called with X_in and y_in kwargs
     """
-    def wrapper(X_train, y_train, X_val, y_val = None) -> pd.Series: # Wrapping input format of pandas to spearmanr
-        return pd.DataFrame([spearmanr(X_train, y_train)], columns = ['corr','pvalue'], index = X_val.index[[0]]) # Returning the start timestamp of the validation fold (later sorted by crossvalidate if split_on_year and sorted are True)
-    interimfunc = crossvalidate(n_folds = n_folds, split_on_year = split_on_year, sort = sort)(wrapper) 
-    def returnfunc(*args, **kwargs) -> np.ndarray: # Function to modify output to be written to shared array
-        return interimfunc(*args, **kwargs) # Returns a dataframe
-    return returnfunc
+    def compatible_with_crossval(X_train, y_train, X_val, y_val = None) -> pd.Series: 
+        if isinstance(X_val, pd.DataFrame):
+            return pd.DataFrame([func(X_train, y_train)], columns = ['corr','pvalue'], index = X_val.index[[0]]) # Returning the start timestamp of the validation fold (later sorted by crossvalidate if split_on_year and sorted are True)
+        else:
+            return pd.DataFrame([func(X_train, y_train)], columns = ['corr','pvalue']) 
+    return compatible_with_crossval
         
-def spearmanr_par(a: np.ndarray, b: np.ndarray):
+def spearmanr_par(a: Union[np.ndarray,pd.DataFrame], b: Union[np.ndarray,pd.DataFrame]):
     """
 i   The timeseries can be discontinuous. Lagging by index cannot be done on that timeseries
-    A lagged version should be present in the columns so a_resid = a[:,0] - f(a[:,1])
+    A lagged version should already be present in the columns so that a_resid = a[:,0] - f(a[:,1])
+    Where a[:,1] is the value of a at t-1. Therefore we remove autocorrelation effects in both variables
+    before correlating only the residuals.
+    based on code at: https://github.com/jakobrunge/tigramite/blob/47d0be9c8117441833a62530566a1babb08e7cc3/tigramite/independence_tests/parcorr.py#L102-L105
     """
+    if isinstance(a, pd.DataFrame):
+        a = a.values
+    if isinstance(b, pd.DataFrame):
+        b = b.values
     a_betahat = np.linalg.lstsq(a[:,[1]], a[:,0], rcond = None)[0] # First argument is the condition, second is the dependent
     a_resid = a[:,0] - np.dot(a[:,[1]], a_betahat)
     b_betahat = np.linalg.lstsq(b[:,[1]], b[:,0], rcond = None)[0]

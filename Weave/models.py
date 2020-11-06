@@ -74,7 +74,7 @@ def crossvalidate(n_folds: int = 10, split_on_year: bool = False, sort: bool = T
                     y_train, y_val = y_in.iloc[train_index], y_in.iloc[val_index]
                 else:
                     X_train, X_val = X_in[train_index,:], X_in[val_index,:]
-                    y_train, y_val = y_in[train_index], y_in[val_index]
+                    y_train, y_val = y_in[train_index,...], y_in[val_index,...] # 1D, but possibly 2D
                 kwargs.update({'X_train':X_train, 'y_train':y_train, 'X_val':X_val, 'y_val':y_val})
                 k += 1
                 results.append(func(*args, **kwargs))

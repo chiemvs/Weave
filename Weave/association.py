@@ -54,28 +54,35 @@ def lag_subset_detrend_associate(spatial_index: tuple):
     else:
         # Now inarray is a one dimensional numpy array, we need the original and series time coordinates to do the lagging
         intimeaxis = var_dict['intimeaxis']
-        oriset = xr.DataArray(inarray, dims = ('time',), coords = {'time':intimeaxis})
         subsettimeaxis = var_dict['responseseries'].time
-        # extract some info 
         laglist = var_dict['laglist']
+        # extract some info 
+        asofunc = var_dict['asofunc']
+        if asofunc.is_partial: # attribute is set at initialization of the associator 
+            timeagg = asofunc.timeagg # Needed when we want to compute partial correlation and provide also X_t-1 (the stepsize is exactly the size of the window)
+            # First column of X data is normal. Second column is the value of (-windowsize) ago
+            intimeaxis = intimeaxis[timeagg:]
+            oriset = xr.DataArray(np.column_stack([inarray[timeagg:],inarray[:-timeagg]]), dims = ('time','what'), coords = {'time':intimeaxis,'what':['t0','t-1']})
+            logging.debug(f'Worker detected is_partial. Creating t-1 with {timeagg} days reduced length from {inarray.shape[0]} to {oriset.shape[0]}')
+        else:
+            oriset = xr.DataArray(inarray, dims = ('time',), coords = {'time':intimeaxis})
 
         logging.debug(f'Worker starts lagging, detrending and correlating of cell {spatial_index} for lags {laglist}')
         for lag in laglist: # Units is days
             oriset['time'] = intimeaxis - pd.Timedelta(str(lag) + 'D') # Each point in time is assigned to a lagged date
             X_set = oriset.reindex_like(subsettimeaxis).dropna(dim = 'time') # We only retain the points assigned to the dates of the response timeseries. Potentially this generates some nans. Namely when the response series extends further than the precursor (ERA5 vs ERA5-land) only retain non_nan because detrend cant handle them
-            X_set.values = detrend(X_set) # Response was already detrended
+            X_set.values = detrend(X_set, axis = 0) # Response was already detrended
             y_set = var_dict['responseseries'].loc[X_set.time] # We want both as matching series
-            # For non-cv asofuncs they operate on dataarrays (n_obs,2) with zeroth column the precursor (x) and first column the response (y), for cv we to provide input and capture output of the crossvalidated function, all that should be already in asofunc (like Weave.utils.spearmanr_cv)
+            # For non-cv asofuncs we feed the two dataarrays (n_obs,) of the precursor (x) and (y), for cv we to provide input as pandas and capture output of the crossvalidated function, all that should be already in asofunc
             out_index = (laglist.index(lag), slice(None), slice(None)) + spatial_index # Remember the shape of (len(lagrange),self.n_folds,2) + spatdims. So regardless of crossval at least one fold is mimiced
             if do_crossval:
-                outarray[out_index] = var_dict['asofunc'](X_in = X_set.to_pandas(), y_in = y_set.to_pandas())
+                outarray[out_index] = asofunc(X_in = X_set.to_pandas(), y_in = y_set.to_pandas()) # Outarray returns a dataframe
             else:
-                combined = np.column_stack((X_set, y_set)) 
-                outarray[out_index] = var_dict['asofunc'](combined) # Asofunc should accept 2D data array and return (corr,pvalue)
+                outarray[out_index] = var_dict['asofunc'](X_set, y_set) # Asofunc should accept two 1D data arrays and return (corr,pvalue)
 
 class Associator(Computer):
 
-    def __init__(self, responseseries: xr.DataArray, data: xr.DataArray, laglist: list, association: Callable, n_folds: int = None) -> None:
+    def __init__(self, responseseries: xr.DataArray, data: xr.DataArray, laglist: list, association: Callable, is_partial: bool = False, timeagg: int = None, n_folds: int = None) -> None:
         """
         Is fed with an already loaded data array, this namely is an intermediate timeaggregated array
         Always shares the input array, such that it can be deleted after initialization
@@ -83,13 +90,15 @@ class Associator(Computer):
         laglist is how far to shift the data in number of days. A lag of -10 means that data values of 1979-01-01 are associated to the response values at 1979-01-11
         Choice to supply the function that determines association between two timeseries
         Should return (corr_float, p_value_float)
-        If the association should be computed in cross-val mode (computation on train only) then supply an n_folds parameter (has to match the return size for the decorated association func)
+        If the association should be computed in cross-val mode (computation on train only) then supply an n_folds parameter (has to match the return size for the decorated association func). If it is a partial correlation, some extra lagging needs to take place, and you also need to supply the timeagg
         """
         Computer.__init__(self, share_input=True, data = data) # Fills a shared array at self.inarray
 
 
         self.laglist = laglist
         self.asofunc = association
+        self.asofunc.is_partial = is_partial
+        self.asofunc.timeagg = timeagg
         self.responseseries = responseseries
         """
         For each cell we are going to produce 2 association values, a strength and a significance
