@@ -23,12 +23,13 @@ sys.path.append(PACKAGEDIR)
 from Weave.processing import TimeAggregator
 from Weave.association import Associator
 from Weave.inputoutput import Writer
+from Weave.models import crossvalidate
 from Weave.utils import agg_time, spearmanr_par, prepare_scipy_stats_for_crossval #kendall_predictand #kendall_choice, chi
 
 logging.basicConfig(filename= TMPDIR / 'find_precursors.log', filemode='w', level=logging.DEBUG, format='%(process)d-%(relativeCreated)d-%(message)s')
 # Open a response timeseries. And extract a certain cluster with a cluster template
 response = xr.open_dataarray(ANOMDIR / 't2m_europe.anom.nc')
-clusterfield = xr.open_dataarray(CLUSTERDIR / 't2m-q095.nc').sel(nclusters = 14)
+clusterfield = xr.open_dataarray(CLUSTERDIR / 't2m-q095.nc').sel(nclusters = 15) # Used to be 14, now england is not a part
 reduced = response.groupby(clusterfield).mean('stacked_latitude_longitude')
 reduced = reduced.sel(clustid = 9) # In this case cluster 9 is western europe.
 #reduced = response.groupby(clusterfield).quantile(q = 0.8, dim = 'stacked_latitude_longitude')
@@ -46,15 +47,14 @@ files.remove('swvl3_europe.anom.nc')
 files.remove('z300_nhmin.anom.nc') # Only nhnorm retained
 to_reduce = ['snowc','siconc'] # Variables that are reduced and stacked etc, such that they are not too large for parallel association
 #files = ['sst_nhplus.anom.nc', 'z300_nhnorm.anom.nc', 'swvl13_europe.anom.nc']
-files = ['sst_nhplus.anom.nc']
 
 # Testing the cross-validation setting
 #asofunc = crossvalidate(5,True,True)(prepare_scipy_stats_for_crossval(spearmanr)) 
 # Testing the partial correlation settion
-asofunc = spearmanr_par
+#asofunc = spearmanr_par
+asofunc = crossvalidate(5,True,True)(prepare_scipy_stats_for_crossval(spearmanr_par)) # Sorting based on validation timeslice start data is set to true
 
 timeaggs = [1, 3, 5, 7, 11, 15, 21, 31] # Block/rolling aggregations.
-#timeaggs = [1,7,30] # Block/rolling aggregations.
 # Open a precursor array
 for timeagg in timeaggs:
     #laglist = [-1, -3, -5, -7, -9, -11, -15, -20, -25, -30, -35, -40, -45] #list(timeagg * np.arange(1,11))
@@ -75,9 +75,9 @@ for timeagg in timeaggs:
             ta = TimeAggregator(datapath = ANOMDIR / inputfile, share_input = True, reduce_input = (varname in to_reduce))
             mean = ta.compute(nprocs = NPROC, ndayagg = timeagg, method = 'mean', firstday = pd.Timestamp(responseagg.time[0].values), rolling = True)
             del ta
-            ac = Associator(responseseries = summersubset, data = mean, laglist = laglist, association = asofunc, timeagg = timeagg, is_partial = True, n_folds = None)
+            ac = Associator(responseseries = summersubset, data = mean, laglist = laglist, association = asofunc, timeagg = timeagg, is_partial = True, n_folds = 5)
             del mean
-            corr = ac.compute(NPROC, alpha = 5*10**(-6 - 0.2*(timeagg-1))) # Variable alpha, ranges from 5e-6 to 5e-12 for timeaggs 1 to 31
+            corr = ac.compute(NPROC, alpha = 5*10**(-4 - 0.2*(timeagg-1))) # Variable alpha, used to ranges from 5e-6 to 5e-12 for timeaggs 1 to 31, now 5e-4 to 5e-10. 
             if varname in to_reduce:
                 example = xr.open_dataarray(ANOMDIR / inputfile)[0]
                 corr = corr.unstack('stacked').reindex_like(example) # For correct ordering of the coords

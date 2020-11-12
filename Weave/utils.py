@@ -151,6 +151,8 @@ def agg_time(array: xr.DataArray, ndayagg: int = 1, method: str = 'mean', firstd
     Trailing Nan's are removed.
     """
     assert (np.diff(array.time) == np.timedelta64(1,'D')).all(), "time axis should be a continuous daily to be aggregated, though nan is allowed"
+    if not firstday is None:
+        array = array.sel(time = slice(firstday, None))
     if rolling:
         name = array.name
         attrs = array.attrs
@@ -160,7 +162,6 @@ def agg_time(array: xr.DataArray, ndayagg: int = 1, method: str = 'mean', firstd
         array.name = name
         array.attrs = attrs
     else:
-        array = array.sel(time = slice(firstday, None))
         input_length = len(array.time)
         f = getattr(array.resample(time = str(ndayagg) + 'D', closed = 'left', label = 'left'), method)
         array = f(dim = 'time', keep_attrs = True, skipna = False)

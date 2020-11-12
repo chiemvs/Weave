@@ -51,6 +51,10 @@ def lag_subset_detrend_associate(spatial_index: tuple):
         logging.debug(f'Worker found empty cell at {spatial_index}, returning np.nan')
         out_index = (slice(None),slice(None),slice(None)) + spatial_index
         outarray[out_index] = np.nan # Writes np.nan both for the association strength and the significance.
+    elif (inarray == inarray[0]).all():
+        logging.debug(f'Worker found constant cell at {spatial_index}, correlation not defined, returning np.nan')
+        out_index = (slice(None),slice(None),slice(None)) + spatial_index
+        outarray[out_index] = np.nan # Writes np.nan both for the association strength and the significance.
     else:
         # Now inarray is a one dimensional numpy array, we need the original and series time coordinates to do the lagging
         intimeaxis = var_dict['intimeaxis']
@@ -142,10 +146,14 @@ class Associator(Computer):
             pfield = np_outarray[lagindex,foldindex,1,...]
             nonan_indices = np.where(~np.isnan(pfield)) # Tuple with arrays of indices. one array if only 1D, but two in a 2D tuple if two spatial dimensions
             pfield_flat = pfield[nonan_indices].flatten() # As multipletest can only handle 1D p-value arrays, and subsetting to not-nan because we don't want nan to contribute to n_tests
-            fracbefore = round((pfield_flat < alpha).sum() / pfield_flat.size , 5)
-            reject, pfield_flat, garbage1, garbage2 = multipletests(pfield_flat, alpha = alpha, method = 'fdr_bh', is_sorted = False)
-            fracafter = round((pfield_flat < alpha).sum() / pfield_flat.size , 5)
-            mask[(lagindex,foldindex) + nonan_indices] = ~reject # First part of this joined tuple is only one number, the index of the current lag in the lagaxis
+            if pfield_flat.size == 0: # No valid correlations defined, nothing could be significant, no need for multiple testing
+                fracbefore = .0
+                fracafter = .0
+            else:
+                fracbefore = round((pfield_flat < alpha).sum() / pfield_flat.size , 5)
+                reject, pfield_flat, garbage1, garbage2 = multipletests(pfield_flat, alpha = alpha, method = 'fdr_bh', is_sorted = False)
+                fracafter = round((pfield_flat < alpha).sum() / pfield_flat.size , 5)
+                mask[(lagindex,foldindex) + nonan_indices] = ~reject # First part of this joined tuple is only one number, the index of the current lag in the lagaxis
             if self.do_crossval:
                 self.attrs.update({f'lag{self.laglist[lagindex]}_fold{foldindex}':f'frac p < {alpha} before: {fracbefore}, after: {fracafter}'})
             else:
