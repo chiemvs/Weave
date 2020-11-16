@@ -109,6 +109,24 @@ class disk_interface(object):
 
 output = disk_interface(outpath)
 
+def actual_dimreduction(stacked_subset: xr.Dataset, clustid_mask: xr.DataArray, metric: str, lag: int, anomaly_name: str):
+    """
+    requires the (spatially stacked) dataset with 'correlation' and the timeseries named with 'anomaly_name'
+    correlation (nspace,)
+    aggregated anomalies (ntime, nspace)
+    cluster_mask (nspace,)
+    calls the computations from Weave.dimreduction
+    """
+    if metric == 'spatcov':
+        pattern = stacked_subset['correlation'][clustid_mask].expand_dims('lag', axis = 0) # Otherwise it does not fit into the spatcov function
+        spatcov = spatcov_multilag(pattern, stacked_subset[anomaly_name][:,clustid_mask], laglist = [lag]) # Not really mutlilag. But then the pattern is also unique to the lag
+        result = spatcov.squeeze().drop('lag').to_dataframe()
+    elif metric == 'mean':
+        result = mean_singlelag(precursor = stacked_subset[anomaly_name][:,clustid_mask], lag = lag).to_dataframe()
+    else:
+        raise ValueError('invalid value for metric, dimension reduction method unknown')
+    return result 
+
 for inputpath in files:
     filename = inputpath.parts[-1]
     variable, timeagg = filename.split('.')[:2]
@@ -159,52 +177,36 @@ for inputpath in files:
             ds = ds.reindex_like(mean) # Since the time aggregated version has the potential to be a spatial subset
             ds[mean.name] = mean # Should not copy the data
 
-            for fullkey in todo: 
-                fold,_,_,lag,_,clustid,metric = fullkey
-                subset = ds.sel(lag = lag, fold = fold).stack({'latlon':['latitude','longitude']}) # 1D otherwise boolean indexing is not supported, unfortunately this stacking currently happens for each clustid and metric, but should be quite quick and is also what happens internally with groupby
-                clustid_mask = subset['clustid'] == clustid # To discard other clustids and nan-field
-                if metric == 'spatcov':
-                    pattern = subset['correlation'][clustid_mask].expand_dims('lag', axis = 0) # Otherwise it does not fit into the spatcov function
-                    spatcov = spatcov_multilag(pattern, subset[mean.name][:,clustid_mask], laglist = [lag]) # Not really mutlilag. But then the pattern is also unique to the lag
-                    result = spatcov.squeeze().drop('lag').to_dataframe()
-                elif metric == 'mean':
-                    result = mean_singlelag(precursor = subset[mean.name][:,clustid_mask], lag = lag).to_dataframe()
-                else:
-                    raise ValueError('invalid value for metric, dimension reduction method unknown')
-                result.columns = pd.MultiIndex.from_tuples([fullkey], names = todo.names)
-                output.write_to_file(result, trim_fake_fold = fakefold)
+            for partkey in todo.droplevel(['clustid','metric']).drop_duplicates(): 
+                fold,_,_,lag,_ = partkey
+                subset = ds.sel(lag = lag, fold = fold).stack({'latlon':['latitude','longitude']}) # 1D otherwise boolean indexing is not supported, fortunately this stacking currently happens per fold and lag, and then we retrieve and loop further over the corresponding todo clustid and metric combinations. Masking and subsetting is probably also what happens internally with groupby
+                for fullkey in todo[todo.get_locs((fold,slice(None),slice(None),lag))]:
+                    _,_,_,_,_,clustid,metric = fullkey
+                    clustid_mask = subset['clustid'] == clustid # To discard other clustids and nan-field
+                    result = actual_dimreduction(stacked_subset = subset, clustid_mask = clustid_mask, metric = metric, lag = lag, anomaly_name = mean.name)
+                    result.columns = pd.MultiIndex.from_tuples([fullkey], names = todo.names)
+                    output.write_to_file(result, trim_fake_fold = fakefold)
             del mean, ds
-        else: # In this case the loop is organized differently. Sub-domain/aggregation per lag per clustid
-            pass
-            # Loop on a reduced set of (lag, clustid) in todo. And then later search the remaining keys belonging to that pair, with something like loc
-            todo.get_loc_level(lag,'lag') # Twice, perhaps np.logical_and?
+        else: # In this case the loop is organized differently. Sub-domain/aggregation per lag per clustid and per fold because there can be pretty big differences
+            logging.info('variable in to_reduce, proceeding to aggregation per lag, clustid and fold')
+            for partkey in todo.droplevel('metric').drop_duplicates():
+                fold,_,_,lag,_,clustid = partkey
             
-#            logging.info('variable in to_reduce, proceeding to aggregation per lag and clustid')
-#            for lag in lags:
-#                ncluster = int(nclusters.sel(lag = lag))
-#                if ncluster > 0:
-#                    for clustid in range(ncluster):
-#                        in_this_cluster = ds['clustid'].sel(lag = lag) == clustid
-#                        in_this_cluster = in_this_cluster.stack({'latlon':['latitude','longitude']})
-#                        in_this_cluster = in_this_cluster[in_this_cluster] 
-#                        subdomain = Region('subdomain', float(in_this_cluster.latitude.max()), float(in_this_cluster.longitude.min()), float(in_this_cluster.latitude.min()), float(in_this_cluster.longitude.max())) 
-#                        logging.debug(f'established subdomain for cluster {clustid} for lag {lag}')
-#                        ta = TimeAggregator(datapath = anompath, share_input = True, reduce_input = False, reduce_dtype = True, region = subdomain) # We are going to do a full aggregation once, to cover all lags and clustids
-#                        mean = ta.compute(nprocs = NPROC, ndayagg = int(timeagg), method = 'mean', firstday = firstday, rolling = True)
-#                        del ta
-#                        mean = mean[np.logical_or(mean.time.dt.season == 'MAM',mean.time.dt.season == 'JJA'),...] # Throw away some values to reduce memoty cost of grouping but still keeping the ability to lag into previous season.
-#                        tempset = ds.sel(lag = lag).reindex_like(mean) # Since the time aggregated version has the potential to be a spatial subset
-#                        tempset[mean.name] = mean
-#                        tempset = tempset.stack({'latlon':['latitude','longitude']})
-#                        indexer = tempset['clustid'] == clustid
-#                        spatcov = spatcov_multilag(tempset['correlation'][indexer].expand_dims({'lag':1}, axis = 0), tempset[mean.name][...,indexer], laglist = [lag]) # Not really mutlilag. But then the pattern is also unique to the lag
-#                        spatcov = spatcov.squeeze().drop('lag').to_dataframe()
-#                        spatcov.columns = pd.MultiIndex.from_tuples([(variable,int(timeagg),int(lag),int(lag)+int(timeagg),int(clustid),'spatcov')], names = ['variable','timeagg','lag','separation','clustid','metric'])
-#                        outcomes.append(spatcov)
-#                        clustmean = mean_singlelag(precursor = tempset[mean.name][...,indexer], lag = int(lag)).to_dataframe()
-#                        clustmean.columns = pd.MultiIndex.from_tuples([(variable,int(timeagg),int(lag),int(lag)+int(timeagg),int(clustid),'mean')], names = ['variable','timeagg','lag','separation','clustid','metric'])
-#                        outcomes.append(clustmean)
-#    else:
-#        logging.info(f'no clusters found in for all lags: {lags} in patternfile {inputpath}')
-#    logging.info('on to next variable/timeagg')
-#
+                in_this_cluster = ds['clustid'].sel(lag = lag, fold = fold) == clustid
+                in_this_cluster = in_this_cluster.stack({'latlon':['latitude','longitude']})
+                in_this_cluster = in_this_cluster[in_this_cluster] 
+                subdomain = Region('subdomain', float(in_this_cluster.latitude.max()), float(in_this_cluster.longitude.min()), float(in_this_cluster.latitude.min()), float(in_this_cluster.longitude.max())) 
+                ta = TimeAggregator(datapath = anompath, share_input = True, reduce_input = False, reduce_dtype = True, region = subdomain) 
+                mean = ta.compute(nprocs = NPROC, ndayagg = int(timeagg), method = 'mean', firstday = firstday, rolling = True)
+                del ta
+                mean = mean[np.logical_or(mean.time.dt.season == 'MAM',mean.time.dt.season == 'JJA'),...] # Throw away some values to reduce memoty cost of grouping but still keeping the ability to lag into previous season.
+                subset = ds.sel(lag = lag, fold = fold).reindex_like(mean) # Since the time aggregated version has the potential to be a spatial subset
+                subset[mean.name] = mean
+                subset = subset.stack({'latlon':['latitude','longitude']})
+                clustid_mask = subset['clustid'] == clustid
+                # Find the missing metrics too 
+                for fullkey in todo[todo.get_locs((fold,slice(None),slice(None),lag,slice(None),clustid))]:
+                    _,_,_,_,_,_,metric = fullkey
+                    result = actual_dimreduction(stacked_subset = subset, clustid_mask = clustid_mask, metric = metric, lag = lag, anomaly_name = mean.name)
+                    result.columns = pd.MultiIndex.from_tuples([fullkey], names = todo.names)
+                    output.write_to_file(result, trim_fake_fold = fakefold)
