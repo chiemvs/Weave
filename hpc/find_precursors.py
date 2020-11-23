@@ -45,19 +45,17 @@ files.remove('swvl1_europe.anom.nc') # We only want to keep the merged one: swvl
 files.remove('swvl2_europe.anom.nc')
 files.remove('swvl3_europe.anom.nc')
 files.remove('z300_nhmin.anom.nc') # Only nhnorm retained
+files.remove('z500_europe.anom.nc') # too similar to z300
 to_reduce = ['snowc','siconc'] # Variables that are reduced and stacked etc, such that they are not too large for parallel association
 #files = ['sst_nhplus.anom.nc', 'z300_nhnorm.anom.nc', 'swvl13_europe.anom.nc']
 
-# Testing the cross-validation setting
-#asofunc = crossvalidate(5,True,True)(prepare_scipy_stats_for_crossval(spearmanr)) 
-# Testing the partial correlation settion
 #asofunc = spearmanr_par
 asofunc = crossvalidate(5,True,True)(prepare_scipy_stats_for_crossval(spearmanr_par)) # Sorting based on validation timeslice start data is set to true
+#asofunc = crossvalidate(5,True,True)(prepare_scipy_stats_for_crossval(spearmanr)) # Sorting based on validation timeslice start data is set to true
 
 timeaggs = [1, 3, 5, 7, 11, 15, 21, 31] # Block/rolling aggregations.
 # Open a precursor array
 for timeagg in timeaggs:
-    #laglist = [-1, -3, -5, -7, -9, -11, -15, -20, -25, -30, -35, -40, -45] #list(timeagg * np.arange(1,11))
     absolute_separation = np.array([0,1,3,5,7,11,15,21,31]) # Days inbetween end of precursor and beginning of response 
     laglist = [0,] + list(-timeagg - absolute_separation) # Dynamic lagging to avoid overlap, lag zero is the overlap
     # Aggregate the response, subset and detrend
@@ -65,6 +63,7 @@ for timeagg in timeaggs:
     response_t1 = np.column_stack([responseagg[timeagg:],responseagg[:-timeagg]]) # First column is concurrent. 2nd is value from one step back (t-1)
     response_t1 = xr.DataArray(response_t1, dims = ('time','what'), coords = {'time':responseagg.coords['time'][timeagg:], 'what':['t0','t-1']})
     summersubset = response_t1[response_t1.time.dt.season == 'JJA']
+    #summersubset = responseagg[responseagg.time.dt.season == 'JJA']
     summersubset.values = detrend(summersubset.values, axis = 0)
     for inputfile in files:
         # Investigate the precursors
@@ -77,7 +76,7 @@ for timeagg in timeaggs:
             del ta
             ac = Associator(responseseries = summersubset, data = mean, laglist = laglist, association = asofunc, timeagg = timeagg, is_partial = True, n_folds = 5)
             del mean
-            corr = ac.compute(NPROC, alpha = 5*10**(-4 - 0.2*(timeagg-1))) # Variable alpha, used to ranges from 5e-6 to 5e-12 for timeaggs 1 to 31, now 5e-4 to 5e-10. 
+            corr = ac.compute(NPROC, alpha = 5*10**(-4 - 0.3*(timeagg-1))) #5*10**(-4 - 0.2*(timeagg-1))) # Variable alpha, used to ranges from 5e-6 to 5e-12 for timeaggs 1 to 31, now 5e-4 to 5e-10. Also stry 5e-5 to 5e-13
             if varname in to_reduce:
                 example = xr.open_dataarray(ANOMDIR / inputfile)[0]
                 corr = corr.unstack('stacked').reindex_like(example) # For correct ordering of the coords
