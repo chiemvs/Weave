@@ -12,7 +12,7 @@ try:
 except ImportError:
     pass
 
-from typing import Callable
+from typing import Callable, Union
 from collections import OrderedDict
 from sklearn.model_selection import KFold, GroupKFold
 from sklearn.metrics import mean_squared_error, r2_score, mean_absolute_error, brier_score_loss, log_loss
@@ -44,9 +44,11 @@ def crossvalidate(n_folds: int = 10, split_on_year: bool = False, sort: bool = T
         Manipulates the input arguments of func
         X_in and y_in are distributed over X_train, y_train, X_val, y_val
         func should be a function that returns pandas objects
-        TODO: remove debugging print statements
         possibility to split cleanly on years. Years are grouped into distinct consecutive groups, such that the amount of groups equals the disered amount of folds.
         With split on year there is no guarantee of the folds [0 to nfolds-1] to be chronological on the time axis. Therefore a sorting of time index is needed and can be asked.
+        Also it can be that X_in carries crossvalidated information (column index level with fold indices)
+        In that case the selection of a row fold is accompanied by selection of the correct set of columns
+        You have to make sure yourself that the k-th indices match, with split on year they are not neccesarily chronological
         """
         def wrapper(*args, **kwargs) -> pd.Series:
             try:
@@ -66,11 +68,22 @@ def crossvalidate(n_folds: int = 10, split_on_year: bool = False, sort: bool = T
             else:
                 kf = KFold(n_splits = n_folds)
                 kf_kwargs = dict(X = X_in)
+            try:
+                fold_in_columns = 'fold' in X_in.columns.names # Will fail if numpy or pd.Series
+                if fold_in_columns:
+                    assert len(np.unique(X_in.columns.get_level_values('fold'))) == n_folds, f'fold level present in columns, but its k unique values should equal current n_folds {n_folds}'
+                    assert X_in.columns.names.index('fold') == 0, 'fold level present in columns, but make sure it is the zeroth (topmost) level'
+                    logging.debug('Fold level present in columns, row subsetting will be accompanied by column subsetting')
+            except AttributeError:
+                fold_in_columns = False
             results = []
             k = 0
             for train_index, val_index in kf.split(**kf_kwargs): # This generates integer indices, ultimately pure numpy and slices would give views. No copy of data, better for distributed
                 if isinstance(X_in, (pd.Series,pd.DataFrame)):
-                    X_train, X_val = X_in.iloc[train_index], X_in.iloc[val_index]
+                    if fold_in_columns:
+                        X_train, X_val = X_in.iloc[train_index, X_in.columns.get_loc(k)], X_in.iloc[val_index, X_in.columns.get_loc(k)]
+                    else:
+                        X_train, X_val = X_in.iloc[train_index], X_in.iloc[val_index]
                     y_train, y_val = y_in.iloc[train_index], y_in.iloc[val_index]
                 else:
                     X_train, X_val = X_in[train_index,:], X_in[val_index,:]
@@ -307,21 +320,46 @@ def compute_forest_shaps(model: Callable, X_in, y_in, X_val = None, y_val = None
     else:
         return inner_func(model = model, X_train = X_in, y_train = y_in, X_val = X_val, y_val = y_val) 
 
+def map_foldindex_to_groupedorder(X: pd.DataFrame, n_folds: int) -> None:
+    """
+    Mapping the chronological validation fold index (clusters are stored that way) to the foldorder
+    as defined by the grouped k-fold cross validation
+    Make sure the timeseries in X are completely clipped in time
+    Performed inplace
+    """
+    def get_validation_fold_time(X_train, y_train, X_val: pd.DataFrame, y_val: Union[pd.Series, pd.DataFrame]) -> pd.Series:
+        """
+        Small util to get the first timestamp of the validation fold 
+        belonging to the k-th index of the k-fold crossvalidation
+        Useful for split_on_year because the ordering in time can get permuted
+        f = crossvalidate(k,bool,bool)(get_validation_fold_time)
+        f(X_in,y_in)
+        """
+        timeindex = y_val.index[[0]]
+        return pd.Series(timeindex, index = timeindex)
+    f = crossvalidate(n_folds, True, True)(get_validation_fold_time) # sorting needs to be activated because then we how the indices line up chronologically
+    foldorder = f(X_in = X, y_in = X) 
+    index_to_order = pd.Series(foldorder.index.droplevel('time'), index = pd.RangeIndex(len(foldorder)))
+    X.columns.set_levels(index_to_order, level = X.columns.names.index('fold'), inplace = True)
+
 if __name__ == '__main__':
     from scipy.signal import detrend
-    Y_path = '/nobackup_1/users/straaten/spatcov/response.multiagg.trended.parquet'
-    X_path = '/nobackup_1/users/straaten/spatcov/precursor.multiagg.parquet'
-    #Y_path = '/scistor/ivm/jsn295/clustertest_roll_spearman_varalpha/response.multiagg.trended.parquet'
-    #X_path = '/scistor/ivm/jsn295/clustertest_roll_spearman_varalpha/precursor.multiagg.parquet'
-    #Y_path = '/scistor/ivm/jsn295/clusterpar3_roll_spearman_varalpha/response.multiagg.trended.parquet'
-    #X_path = '/scistor/ivm/jsn295/clusterpar3_roll_spearman_varalpha/precursor.multiagg.parquet'
+    logging.basicConfig(level = logging.DEBUG)
+    #Y_path = '/nobackup_1/users/straaten/spatcov/response.multiagg.trended.parquet'
+    #X_path = '/nobackup_1/users/straaten/spatcov/precursor.multiagg.parquet'
+    #Y_path = '/scistor/ivm/jsn295/non_cv/clusterpar3_roll_spearman_varalpha/response.multiagg.trended.parquet'
+    #X_path = '/scistor/ivm/jsn295/non_cv/clusterpar3_roll_spearman_varalpha/precursor.multiagg.parquet'
+    Y_path = '/scistor/ivm/jsn295/paramtest3/attempt7/response.multiagg.trended.parquet'
+    X_path = '/scistor/ivm/jsn295/paramtest3/attempt7/precursor.multiagg.parquet'
     y = pd.read_parquet(Y_path).loc[:,(slice(None),7,slice(None))].iloc[:,0] # Only summer
-    X = pd.read_parquet(X_path).loc[y.index, (slice(None),slice(None),slice(None),-21,slice(None),'spatcov')].dropna(axis = 0, how = 'any')
-    #X = X.sort_index(axis = 1).loc[:,(slice(None),slice(21,22))] # Small subset fit test
+    X = pd.read_parquet(X_path).loc[y.index, (slice(None),slice(None),slice(None),slice(None),0)].dropna(axis = 0, how = 'any') # A single separation, extra level because of fold
     y = y.reindex(X.index)
     y = pd.Series(detrend(y), index = y.index, name = y.name) # Also here you see that detrending improves Random forest performance a bit
     y = y > y.quantile(0.8)
 
+    # Testing the relabeling according to new grouped order
+    map_foldindex_to_groupedorder(X = X, n_folds = 5)
+    
     # Testing cross validation split on_year vs not on_year
     # Validation folds should be distinc years
     #def test_func(model, X_train, y_train, X_val, y_val):
@@ -335,8 +373,8 @@ if __name__ == '__main__':
     #f2(model = None, X_in = X, y_in = y)
 
     # Testing a classifier
-    r2 = RandomForestClassifier(max_depth = 5, n_estimators = 1500, min_samples_split = 20, max_features = 0.15, n_jobs = 7) # Balanced class weight helps a lot.
-    shappies = compute_forest_shaps(r2, X, y, on_validation = True, bg_from_training = True, sample = 'standard', n_folds = 3, split_on_year = True)
+    #r2 = RandomForestClassifier(max_depth = 5, n_estimators = 1500, min_samples_split = 20, max_features = 0.15, n_jobs = 7) # Balanced class weight helps a lot.
+    #shappies = compute_forest_shaps(r2, X, y, on_validation = True, bg_from_training = True, sample = 'standard', n_folds = 3, split_on_year = True)
     #test = fit_predict(r2, X, y, n_folds = 5) # evaluate_kwds = dict(scores = [brier_score_loss,log_loss], score_names = ['bs','ll'])
     #test.index = test.index.droplevel(0)
     #data = np.stack([y.values,test.values], axis = -1)

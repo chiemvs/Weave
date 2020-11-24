@@ -28,7 +28,7 @@ from Weave.inputoutput import Writer, Reader
 from Weave.utils import agg_time, Region
 from Weave.dimreduction import spatcov_multilag, mean_singlelag
 
-logging.basicConfig(filename= TMPDIR / 'dimreduce_precursors_snowsea.log', filemode='w', level=logging.DEBUG, format='%(process)d-%(relativeCreated)d-%(message)s')
+logging.basicConfig(filename= TMPDIR / 'dimreduce_precursors.log', filemode='w', level=logging.DEBUG, format='%(process)d-%(relativeCreated)d-%(message)s')
 firstday = pd.Timestamp('1981-01-01')
 responseclustid = 9
 timeaggs = [1, 3, 5, 7, 11, 15, 21, 31] 
@@ -37,7 +37,7 @@ timeaggs = [1, 3, 5, 7, 11, 15, 21, 31]
 # We will make a seperate response dataframe now first
 # Only rolling aggregation is possible for intercomparing timescales, as those are equally (daily) stamped
 response_output = OUTDIR / '.'.join(['response','multiagg','trended','parquet']) 
-if False: #not response_output.exists():
+if not response_output.exists():
     logging.debug(f'no previously existing file found at {response_output}')
     response = xr.open_dataarray(ANOMDIR / 't2m_europe.anom.nc')
     clusterfield = xr.open_dataarray(CLUSTERDIR / 't2m-q095.nc').sel(nclusters = 15)
@@ -61,12 +61,7 @@ else:
     logging.debug(f'previously existing file found at {response_output}, do nothing')
 
 # Only rolling aggregation is possible for intercomparing timescales, as those are equally (daily) stamped
-do = 'snowsea' # 'other'  
-if do == 'other':
-    files = [ f for f in PATTERNDIR.glob('*corr.nc') if (f.is_file() and not (f.name[:4] in ['sico','snow']))]
-else:
-    files = [ f for f in PATTERNDIR.glob('*corr.nc') if (f.is_file() and (f.name[:4] in ['sico','snow']))]
-files = [ f for f in PATTERNDIR.glob('tcc_europe.1.corr.nc') if f.is_file()]
+files = [ f for f in PATTERNDIR.glob('*corr.nc') if f.is_file()]
 to_reduce = ['snowc_nhmin','siconc_nhmin'] # Variables with huge files and remote clusters. Are handled differently (not stacked, but aggregated per cluster per lag)
 # first level loop is variable / timeagg combinations over files
 # Each file has unique clustid shapes per lag, so the
@@ -74,7 +69,7 @@ to_reduce = ['snowc_nhmin','siconc_nhmin'] # Variables with huge files and remot
 # The third level is then the clustids. 
 # On that subset we call the timeaggregator and compute spatial covarianceand mean, this increases read access
 # Internal to spatcov multlilag we have the multiple lags, contained within the file, but this is not used because domains do not overlap
-outpath = OUTDIR / '.'.join(['precursor',do,'multiagg','parquet']) 
+outpath = OUTDIR / '.'.join(['precursor','multiagg','parquet']) 
 class disk_interface(object):
     """ Disk interface to write and to read if unique combination already present """
     def __init__(self, path: Path):
