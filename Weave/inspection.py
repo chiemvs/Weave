@@ -490,5 +490,8 @@ def barplot(impdf: Union[pd.Series,pd.DataFrame], n_most_important = 10, ignore_
     return fig, axes
 
 
-def scatterplot():
+def scatterplot(impdf: ):
     pass
+    # Row wise a single row is needed. Then the corresponding X and y series are retrieved
+    # Needs adaptation to handle time-axis less permutation importance dataframes
+    # An option is loading y (diregarding axis) and loading X fully (and subsetting it with y. Which is saved as a summersubset)
