@@ -23,7 +23,7 @@ sys.path.append(PACKAGEDIR)
 from Weave.inputoutput import Writer, Reader
 from Weave.clustering import Clustering, haversine_worker, Latlons, MaskingError
 
-logging.basicConfig(filename= TMPDIR / 'cluster_precursors_z300.log', filemode='w', level=logging.DEBUG, format='%(process)d-%(relativeCreated)d-%(message)s')
+logging.basicConfig(filename= TMPDIR / 'cluster_precursors.log', filemode='w', level=logging.DEBUG, format='%(process)d-%(relativeCreated)d-%(message)s')
 
 # Clusterkwargs for hdbscan, coming from manual selection
 hdbscan_kwargs = pd.DataFrame([[2000,4000,600,300,600,1500,400],[4000,7000,2000,2000,3000,5000,1500],[True,True,True,True,True,True,True]], columns = ['t850','z300','tcc','sst','standard','snowc','siconc'], index = ['min_samples','min_cluster_size','allow_single_cluster']) # Before strict optimal
@@ -42,9 +42,9 @@ hdbscan_kwargs = pd.DataFrame([[2000,4000,600,300,600,1500,400],[4000,7000,2000,
 #hdbscan_kwargs = pd.DataFrame([[2000,2000,600,1000,600,1500],[6000,6000,2000,2000,2000,2000],[True,True,True,False,False,False]], columns = ['t850','z300','tcc','sst','standard','snowc'], index = ['min_samples','min_cluster_size','allow_single_cluster']) # attempt1
 hdbscan_kwargs.loc['metric',:] = 'haversine'
 hdbscan_kwargs.loc['core_dist_n_jobs',:] = NPROC
-#corrfiles = [ f for f in PATTERNDIR.glob('*corr.nc') if f.is_file() ]
+corrfiles = [ f for f in PATTERNDIR.glob('*corr.nc') if f.is_file() ]
 #corrfiles = [ f for f in PATTERNDIR.glob('*corr.nc') if f.is_file() and not (f.name[:4] == 'z300')]
-corrfiles = [ f for f in PATTERNDIR.glob('*corr.nc') if f.is_file() and (f.name[:4] == 'z300')]
+#corrfiles = [ f for f in PATTERNDIR.glob('*corr.nc') if f.is_file() and (f.name[:4] == 'z300')]
 
 # first level loop are association metric files, so variable / timeagg combinations
 # The goal is to cluster these patterns based on distance on the globe

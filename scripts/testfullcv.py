@@ -12,28 +12,31 @@ sys.path.append('..')
 from Weave.utils import agg_time, spearmanr_par, bootstrap, prepare_scipy_stats_for_crossval, prepare_scipy_stats_for_array
 from Weave.association import Associator #, init_worker, var_dict
 from Weave.inputoutput import Writer
+from Weave.processing import TimeAggregator
 from Weave.models import crossvalidate
 
 logging.basicConfig(level = logging.DEBUG)
 #t2m = xr.open_dataarray('/nobackup_1/users/straaten/ERA5/t2m/t2m_europe.nc', group = 'mean')[:,50,50]
 #t2m = xr.open_dataarray('/scistor/ivm/jsn295/processed/t2m_europe.anom.nc').sel(latitude = 52, longitude = 4)
 t2m = xr.open_dataarray('/scistor/ivm/jsn295/processed/t2m_europe.anom.nc')[:,10,10]
+ta = TimeAggregator(Path(''), data = t2m)
+t2m = ta.compute(15, ndayagg = 3, rolling= True, firstday = pd.Timestamp('1981-01-01'))
 #tcc = xr.open_dataarray('/nobackup_1/users/straaten/ERA5/tcc/tcc_europe.nc', group = 'mean')[:,:10,:10]
 #z300 = xr.open_dataarray('/scistor/ivm/jsn295/processed/z300_nhmin.anom.nc').sel(latitude = 52, longitude = 4)
 tcc = xr.open_dataarray('/scistor/ivm/jsn295/processed/tcc_europe.anom.nc')[:,:10,:10]
 
 #y_in = t2m.loc[t2m.time.dt.season == 'JJA'].to_pandas()
-#y_in = t2m.loc[t2m.time.dt.season == 'JJA']
+y_in = t2m.loc[t2m.time.dt.season == 'JJA']
 #X_in = tcc.to_pandas().reindex_like(y_in) 
 #data = np.column_stack([t2m,z300])
 
-timeagg = 1
+timeagg = 3
 a = np.column_stack([t2m[timeagg:],t2m[:-timeagg]]) # First column is concurrent. 2nd is value from one step back
 #b = np.column_stack([z300[1:],z300[:-1]]) # First column is concurrent. 2nd is value from one step back
 
 y_in_par = xr.DataArray(a, dims = ('time','what'), coords = {'time':t2m.coords['time'][timeagg:], 'what':['t0','t-1']})
 y_in_par = y_in_par.loc[y_in_par.coords['time'].dt.season == 'JJA']
-y_in = t2m.loc[t2m.coords['time'].dt.season == 'JJA']
+#y_in = t2m.loc[t2m.coords['time'].dt.season == 'JJA']
 
 """
 How to construct the asofunc for regulare spearman cv
@@ -56,11 +59,11 @@ How to construct the partial correlation spearman (with-splitonyear)
 asofunc_par = crossvalidate(5,True,True)(prepare_scipy_stats_for_crossval(spearmanr_par)) 
 #asofunc(X_in = pd.DataFrame(b), y_in = pd.DataFrame(a)) # Not working because of course time axis is needed for indices
 
-self = Associator(responseseries = y_in, data = tcc, laglist = [-1,-2], association = asofunc, is_partial = False, timeagg = 1, n_folds = 5)
-##ret = asofunc(X_in = X_in, y_in = y_in)
+self = Associator(responseseries = y_in_par, data = tcc, laglist = [-1,-2], association = asofunc_par, is_partial = True, timeagg = 3, n_folds = 5)
+###ret = asofunc(X_in = X_in, y_in = y_in)
 corr = self.compute(nprocs = 15)
-self2 = Associator(responseseries = y_in_par, data = tcc, laglist = [-1,-2], association = asofunc_par, is_partial = True, timeagg = 1, n_folds = 5)
-corr_par = self2.compute(nprocs = 15)
+#self2 = Associator(responseseries = y_in_par, data = tcc, laglist = [-1,-2], association = asofunc_par, is_partial = True, timeagg = 1, n_folds = 5)
+#corr_par = self2.compute(nprocs = 15)
 #
 #w = Writer(Path('test.nc'), varname = corr.name)
 #w.create_dataset(example = corr)

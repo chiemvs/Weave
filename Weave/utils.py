@@ -383,7 +383,7 @@ def get_timeserie_properties(series: pd.Series, submonths: list = None, scale_tr
     results = pd.Series({'std':std,'mean':mean,'length':length, 'n_nan':n_nan,'trend':trend, 'intercept':intercept})
     for lag in auto_corr_at:
         lagged = pd.Series(series.values, index = series.index - pd.Timedelta(f'{lag}D'), name = f'{lag}D')
-        results.loc[f'auto{lag}'] = pd.merge(left = series, right = lagged, left_index=True, right_index=True, how = 'inner').corr().iloc[0,-1]
+        results.loc[f'auto{lag}'] = pd.merge(left = series, right = lagged, left_index=True, right_index=True, how = 'inner').corr().iloc[0,-1] # Potential bug here in pd merge when the series is not correctly named, because then it searches for columns
     return(results)
 
 def brier_score_clim(p: float) -> float:
