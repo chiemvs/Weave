@@ -62,7 +62,8 @@ class ImportanceData(object):
         def read_singlefile(fullpath):
             data = pd.read_parquet(fullpath) 
             if not hasattr(self, 'is_shap'):
-                self.is_shap = 'expected_value' in data.columns
+                self.is_shap = 'expected_value' in data.index.get_level_values('variable')
+                #TODO: rewrite below
             if self.is_shap:
                 expected = data.loc[:,'expected_value'].copy() # Copied as series
                 data = data.drop('expected_value',level = 0, axis = 1)

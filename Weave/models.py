@@ -15,9 +15,11 @@ except ImportError:
 from typing import Callable, Union
 from collections import OrderedDict
 from sklearn.model_selection import KFold, GroupKFold
-from sklearn.metrics import mean_squared_error, r2_score, mean_absolute_error, brier_score_loss, log_loss
+from sklearn.metrics import mean_squared_error, r2_score, mean_absolute_error
 from sklearn.ensemble import RandomForestRegressor, RandomForestClassifier
 from PermutationImportance import sklearn_permutation_importance
+
+from .utils import collapse_restore_multiindex 
 
 def evaluate(data = None, y_true = None, y_pred = None, scores = [r2_score, mean_squared_error, mean_absolute_error], score_names = ['r2','mse','mae']) -> pd.Series:
     """
@@ -91,7 +93,14 @@ def crossvalidate(n_folds: int = 10, split_on_year: bool = False, sort: bool = T
                 kwargs.update({'X_train':X_train, 'y_train':y_train, 'X_val':X_val, 'y_val':y_val})
                 k += 1
                 results.append(func(*args, **kwargs))
-            results = pd.concat(results, axis = 0, keys = pd.RangeIndex(n_folds, name = 'fold')) 
+            results = pd.concat(results, axis = 0, keys = pd.RangeIndex(n_folds, name = 'fold'), join = 'outer') # Outer handling of the non-concatenation axis. For the case with cross-validated input this can result in a double fold axis. Therefore check if double (and equal) below
+            if results.index.names.count('fold') == 2:
+                level_nrs = np.where(np.array(results.index.names) == 'fold')[0]
+                try:
+                    assert np.equal(results.index.get_level_values(level_nrs[0]),results.index.get_level_values(level_nrs[1])).all()
+                    results.index = results.index.droplevel(level_nrs[0])
+                except AssertionError:
+                    warnings.warn('concatenation after cross validation resulted in two fold index levels that are unequal. Will not remove them')
             if split_on_year and sort:
                 return(results.sort_index(axis = 0, level = -1)) # Lowest level perhaps called time, highest level in the hierarchy has just become fold,
             else:
@@ -225,6 +234,7 @@ def permute_importance(model: Callable, X_in, y_in, X_val = None, y_val = None, 
     If only X_in and y_in are supplied, then data is intepreted as the complete validation/training set
     on which cross validation is called.
     perm_imp_kwargs are mainly computational arguments
+    unlike shapley values, permutation importance is computed on the validation folds always
     """
     if single_only:
         perm_imp_kwargs['nimportant_vars'] = 1 # Only one pass neccessary
@@ -233,20 +243,20 @@ def permute_importance(model: Callable, X_in, y_in, X_val = None, y_val = None, 
     def inner_func(model, X_train, y_train, X_val: pd.DataFrame, y_val: pd.Series) -> pd.DataFrame:
         model.fit(X = X_train, y = y_train)
         y_val = y_val.to_frame() # Required form for perm imp
-        X_val.columns = ['.'.join([str(c) for c in col]) for col in X_val.columns.values] # Collapse of the index is required unfortunately
+        _, names, dtypes = collapse_restore_multiindex(X_val, axis = 1, inplace = True) # Collapse of the index is required unfortunately for the column names
         result = sklearn_permutation_importance(model = model, scoring_data = (X_val.values, y_val.values), evaluation_fn = evaluation_fn, scoring_strategy = scoring_strategy, variable_names = X_val.columns, **perm_imp_kwargs) # Pass the data as numpy arrays. Avoid bug in PermutationImportance, see scripts/minimum_example.py
         singlepass = result.retrieve_singlepass()
-        singlepass_rank_scores = pd.DataFrame([{'rank':tup[0], 'score':np.mean(tup[1])} for tup in singlepass.values()]) # We want to export both rank and mean score. (It is allowed to average here over all bootstraps even when this happens in one fold of the cross validation, as the grand mean will be equal as group sizes are equal over all cv-folds)
-        singlepass_rank_scores.index = pd.MultiIndex.from_tuples([tuple(string.split('.')) for string in singlepass.keys()], names = X_train.columns.names)
+        singlepass_rank_scores = pd.DataFrame([{'rank':tup[0], 'score':np.mean(tup[1])} for tup in singlepass.values()], index = singlepass.keys()) # We want to export both rank and mean score. (It is allowed to average here over all bootstraps even when this happens in one fold of the cross validation, as the grand mean will be equal as group sizes are equal over all cv-folds)
+        _,_,_ = collapse_restore_multiindex(singlepass_rank_scores, axis = 0, names = names, dtypes = dtypes, inplace = True)
         if single_only:
             return singlepass_rank_scores
         else: # Multipass dataframe probably contains the scores and ranks of only a subset of nimportant_vars variables, nrows is smaller than singlepass
             multipass = result.retrieve_multipass()
-            multipass_rank_scores = pd.DataFrame([{'rank':tup[0], 'score':np.mean(tup[1])} for tup in multipass.values()])
-            multipass_rank_scores.index = pd.MultiIndex.from_tuples([tuple(string.split('.')) for string in multipass.keys()], names = X_train.columns.names)
+            multipass_rank_scores = pd.DataFrame([{'rank':tup[0], 'score':np.mean(tup[1])} for tup in multipass.values()], index = multipass.keys())
+            _,_,_ = collapse_restore_multiindex(multipass_rank_scores, axis = 0, names = names, dtypes = dtypes, inplace = True)
             multipass_rank_scores.columns = pd.MultiIndex.from_product([['multipass'], multipass_rank_scores.columns])# Add levels for the merging
             singlepass_rank_scores.columns = pd.MultiIndex.from_product([['singlepass'], singlepass_rank_scores.columns])# Add levels for the merging
-            return singlepass_rank_scores.join(multipass_rank_scores, how = 'left') # Index based merge
+            return singlepass_rank_scores.join(multipass_rank_scores, how = 'left') # Index based merge where singlepass has the most unlass n_important vars is set to full length. 
 
     if (X_val is None) or (y_val is None):
         f = crossvalidate(n_folds = n_folds, split_on_year = split_on_year)(inner_func)
@@ -254,7 +264,7 @@ def permute_importance(model: Callable, X_in, y_in, X_val = None, y_val = None, 
     else:
         return inner_func(model = model, X_train = X_in, y_train = y_in, X_val = X_val, y_val = y_val) 
 
-def get_forest_properties(forest: RandomForestRegressor, average: bool = True):
+def get_forest_properties(forest: Union[RandomForestRegressor,RandomForestClassifier], average: bool = True):
     """
     needs a fitted forest, extracts properties of the decision tree estimators
     the amount of split nodes is always n_leaves - 1
@@ -285,7 +295,7 @@ def compute_forest_shaps(model: Callable, X_in, y_in, X_val = None, y_val = None
     Cross-validation if X_val and y_val are not supplied
     """
     assert sample in ['standard','negative','positive']
-    max_samples = 500
+    max_samples = 5 #500
     logging.debug(f'TreeShap will be started for {"validation" if on_validation else "training"}, with background data from {"validation" if not bg_from_training else "training"}, event sampling is {sample}')
     # Use similar setup as fit_predict_evaluate, with an inner_func that is potentially called multiple times
     def inner_func(model, X_train, y_train, X_val: pd.DataFrame, y_val: pd.Series) -> pd.DataFrame:
@@ -310,8 +320,11 @@ def compute_forest_shaps(model: Callable, X_in, y_in, X_val = None, y_val = None
         if isinstance(model, RandomForestClassifier):
             shap_values = shap_values[model.classes_.tolist().index(True)] # Only the probabilities for the positive case
             explainer.expected_value = explainer.expected_value[model.classes_.tolist().index(True)] # Base probability / frequency (potentially through a link function) according to the background data. This plus the average shap sum should add up to the climatological probability
-        frame = pd.DataFrame(shap_values, columns = X_val.columns if on_validation else X_train.columns, index = X_val.index if on_validation else X_train.index)
-        frame['expected_value'] = explainer.expected_value # Will have '' for all, except the zeroth, level of the column multiindex
+        frame = pd.DataFrame(shap_values.T, columns = X_val.index if on_validation else X_train.index, index = X_val.columns if on_validation else X_train.columns) # Transpose because we want to match the format of permutation importance
+        # Now we want to add 'expected_value' as another 'variable', Taking a used value (same dtype) as dummy for the other levels
+        dummy_index = list(frame.index[0])
+        dummy_index[frame.index.names.index('variable')] = 'expected_value'
+        frame.loc[tuple(dummy_index),:] = explainer.expected_value
         return frame 
 
     if (X_val is None) or (y_val is None):
@@ -341,58 +354,3 @@ def map_foldindex_to_groupedorder(X: pd.DataFrame, n_folds: int) -> None:
     foldorder = f(X_in = X, y_in = X) 
     index_to_order = pd.Series(foldorder.index.droplevel('time'), index = pd.RangeIndex(len(foldorder)))
     X.columns.set_levels(index_to_order, level = X.columns.names.index('fold'), inplace = True)
-
-if __name__ == '__main__':
-    from scipy.signal import detrend
-    logging.basicConfig(level = logging.DEBUG)
-    #Y_path = '/nobackup_1/users/straaten/spatcov/response.multiagg.trended.parquet'
-    #X_path = '/nobackup_1/users/straaten/spatcov/precursor.multiagg.parquet'
-    #Y_path = '/scistor/ivm/jsn295/non_cv/clusterpar3_roll_spearman_varalpha/response.multiagg.trended.parquet'
-    #X_path = '/scistor/ivm/jsn295/non_cv/clusterpar3_roll_spearman_varalpha/precursor.multiagg.parquet'
-    Y_path = '/scistor/ivm/jsn295/paramtest3/attempt7/response.multiagg.trended.parquet'
-    X_path = '/scistor/ivm/jsn295/paramtest3/attempt7/precursor.multiagg.parquet'
-    y = pd.read_parquet(Y_path).loc[:,(slice(None),7,slice(None))].iloc[:,0] # Only summer
-    X = pd.read_parquet(X_path).loc[y.index, (slice(None),slice(None),slice(None),slice(None),0)].dropna(axis = 0, how = 'any') # A single separation, extra level because of fold
-    y = y.reindex(X.index)
-    y = pd.Series(detrend(y), index = y.index, name = y.name) # Also here you see that detrending improves Random forest performance a bit
-    y = y > y.quantile(0.8)
-
-    # Testing the relabeling according to new grouped order
-    map_foldindex_to_groupedorder(X = X, n_folds = 5)
-    
-    # Testing cross validation split on_year vs not on_year
-    # Validation folds should be distinc years
-    #def test_func(model, X_train, y_train, X_val, y_val):
-    #    print('trainslice:', y_train.index.min(), y_train.index.max())
-    #    print('valslice:', y_val.index.min(), y_val.index.max())
-    #    return pd.Series(dtype = np.int32)
-    #
-    #f1 = crossvalidate(n_folds = 5, split_on_year = False)(test_func)
-    #f1(model = None, X_in = X, y_in = y)
-    #f2 = crossvalidate(n_folds = 5, split_on_year = True)(test_func)
-    #f2(model = None, X_in = X, y_in = y)
-
-    # Testing a classifier
-    #r2 = RandomForestClassifier(max_depth = 5, n_estimators = 1500, min_samples_split = 20, max_features = 0.15, n_jobs = 7) # Balanced class weight helps a lot.
-    #shappies = compute_forest_shaps(r2, X, y, on_validation = True, bg_from_training = True, sample = 'standard', n_folds = 3, split_on_year = True)
-    #test = fit_predict(r2, X, y, n_folds = 5) # evaluate_kwds = dict(scores = [brier_score_loss,log_loss], score_names = ['bs','ll'])
-    #test.index = test.index.droplevel(0)
-    #data = np.stack([y.values,test.values], axis = -1)
-    #from utils import bootstrap, brier_score_clim 
-    #f = bootstrap(5000, return_numeric = True, quantile = [0.05,0.5,0.95])(evaluate)
-    #f2 = bootstrap(5000, blocksize = 15, return_numeric = True, quantile = [0.05,0.5,0.95])(evaluate) # object dtype array
-    #evaluate_kwds = dict(scores = [brier_score_loss], score_names = ['bs'])
-    #ret = f(data, **evaluate_kwds)
-    #ret2 = f2(data, **evaluate_kwds)
-    
-    #hyperparams = dict(min_samples_split = [30,35], max_depth = [15,17,20,23])
-    #hyperparams = dict(min_impurity_decrease = [0.001,0.002,0.003,0.005,0.01])
-    #hyperparams = dict(max_features = [0.05,0.1,0.15,0.2,0.25])
-    #other_kwds = dict(n_jobs = 20, n_estimators = 1000, max_features = 0.2) 
-    #ret = hyperparam_evaluation(RandomForestRegressor, X, y, hyperparams, other_kwds,  fit_predict_evaluate_kwds = dict(properties_too = True))
-    
-    #def wrapper(self, *args, **kwargs):
-    #    return self.predict_proba(*args,**kwargs)[:,-1] # Last class is True
-    #RandomForestClassifier.predict = wrapper # To avoid things inside permutation importance package  
-    #m = RandomForestClassifier(max_depth = 5, min_samples_split = 20, n_jobs = 20, max_features = 0.15, n_estimators = 1500)
-    #ret = permute_importance(m, X_in = X, y_in = y, n_folds = 5, evaluation_fn = brier_score_loss, perm_imp_kwargs = dict(nimportant_vars = None, njobs = 20, nbootstrap = 1500))

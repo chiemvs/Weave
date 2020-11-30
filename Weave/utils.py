@@ -116,11 +116,11 @@ def _zvalue_from_index(arr: np.ndarray, ind: np.ndarray) -> np.ndarray:
         
     return(np.take(arr, idx))
 
-def collapse_restore_multiindex(df: Union[pd.DataFrame,pd.Series], axis: int, names: list = None, ignore_level: int = None, separator: str = '.', inplace: bool = False) -> list:
+def collapse_restore_multiindex(df: Union[pd.DataFrame,pd.Series], axis: int, names: list = None, dtypes: list = None, ignore_level: int = None, separator: str = '.', inplace: bool = False) -> list:
     """
-    Used to collapse a pandas multi_index, for instance for the use case where a plotting procedure requires single level understandable column names 
+    Used to collapse a pandas multi_index into string, for instance for the use case where a plotting procedure requires single level understandable column names 
     Ignore_level only used when collapsing, by calling droplevel, so could also be a string according to the pandas api
-    Returns a list with the old column names, if not inplace also the new frame
+    Returns a list with the old column names, the old dtypes, if not inplace also the new frame
     """
     assert (axis == 0) or (axis == 1), "can collapse/restore either the index or the columns, choose axis 0 or 1"
     if axis == 0:
@@ -132,16 +132,20 @@ def collapse_restore_multiindex(df: Union[pd.DataFrame,pd.Series], axis: int, na
         if not ignore_level is None:
             index = index.droplevel(ignore_level)               
         names = index.names.copy()
+        dtypes = [index.levels[i].dtype for i in range(index.nlevels)]
         index = pd.Index([separator.join([str(c) for c in col]) for col in index.values], dtype = object, name = 'collapsed')
-    else: # In this case we are going to restore from string, new levels will all be string dtype
+    else: # In this case we are going to restore from string, new levels will all be string dtype unless dtypes are supplied
         index = pd.MultiIndex.from_tuples([tuple(string.split(separator)) for string in index.values], names = names)
+        if not dtypes is None: # Restoration
+            for i, dtype in enumerate(dtypes):
+                index.set_levels(index.levels[i].astype(dtype), level = i, inplace = True) # inplace here only affects the just created restoration index, not the df itself
     if inplace:
         setattr(df, what, index)
-        return(None, names)
+        return(None, names, dtypes)
     else:
         df = df.copy()
         setattr(df, what, index)
-        return(df, names)
+        return(df, names, dtypes)
 
 def agg_time(array: xr.DataArray, ndayagg: int = 1, method: str = 'mean', firstday: pd.Timestamp = None, rolling: bool = False) -> xr.DataArray:
     """
@@ -358,7 +362,7 @@ def add_pvalue(func: Callable) -> Callable:
         
     return wrapper
 
-def get_timeserie_properties(series: pd.Series, submonths: list = None, scale_trend_intercept = True, auto_corr_at: list = [1,5]) -> pd.Series:
+def get_timeserie_properties(series: pd.Series, submonths: list = None, scale_trend_intercept = False, auto_corr_at: list = [1,5]) -> pd.Series:
     """ 
     Function to be called on a timeseries (does not need to be contiguous)
     Extracts some statistics that can be of interest and returns them as a Series
@@ -383,7 +387,7 @@ def get_timeserie_properties(series: pd.Series, submonths: list = None, scale_tr
     results = pd.Series({'std':std,'mean':mean,'length':length, 'n_nan':n_nan,'trend':trend, 'intercept':intercept})
     for lag in auto_corr_at:
         lagged = pd.Series(series.values, index = series.index - pd.Timedelta(f'{lag}D'), name = f'{lag}D')
-        results.loc[f'auto{lag}'] = pd.merge(left = series, right = lagged, left_index=True, right_index=True, how = 'inner').corr().iloc[0,-1] # Potential bug here in pd merge when the series is not correctly named, because then it searches for columns
+        results.loc[f'auto{lag}'] = pd.merge(left = series.rename('unlagged'), right = lagged, left_index=True, right_index=True, how = 'inner').corr().iloc[0,-1] # Potential bug here in pd merge when the series is not correctly named, because then it searches for columns
     return(results)
 
 def brier_score_clim(p: float) -> float:
