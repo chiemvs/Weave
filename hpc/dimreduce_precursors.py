@@ -29,7 +29,7 @@ from Weave.inputoutput import Writer, Reader
 from Weave.utils import agg_time, Region
 from Weave.dimreduction import spatcov_multilag, mean_singlelag
 
-logging.basicConfig(filename= TMPDIR / 'dimreduce_precursors2.log', filemode='w', level=logging.DEBUG, format='%(process)d-%(relativeCreated)d-%(message)s')
+logging.basicConfig(filename= TMPDIR / 'dimreduce_precursors3.log', filemode='w', level=logging.DEBUG, format='%(process)d-%(relativeCreated)d-%(message)s')
 firstday = pd.Timestamp('1981-01-01')
 responseclustid = 9
 timeaggs = [1, 3, 5, 7, 11, 15, 21, 31] 
@@ -62,7 +62,8 @@ else:
     logging.debug(f'previously existing file found at {response_output}, do nothing')
 
 # Only rolling aggregation is possible for intercomparing timescales, as those are equally (daily) stamped
-files = [ f for f in PATTERNDIR.glob('*corr.nc') if f.is_file() and not (f.name[:4] == 'snow')]
+#files = [ f for f in PATTERNDIR.glob('*corr.nc') if f.is_file() and not (f.name[:4] == 'snow')]
+files = [ f for f in PATTERNDIR.glob('*corr.nc') if f.is_file()]
 to_reduce = ['snowc_nhmin','siconc_nhmin'] # Variables with huge files and remote clusters. Are handled differently (not stacked, but aggregated per cluster per lag)
 # first level loop is variable / timeagg combinations over files
 # Each file has unique clustid shapes per lag, so the
@@ -160,9 +161,9 @@ for inputpath in files:
 
         if len(todo) > 0:
             if not variable in to_reduce:
-                logging.info(f'variable not in to_reduce, proceeding to aggregation once, for all combinations')
-                # We are going to do a full aggregation once, to cover all lags folds and clustids
-                # But slightly shrink the domain
+                logging.info(f'variable not in to_reduce, proceeding to normal aggregation once, for all combinations')
+                # We are going to do a full aggregation once to cover all lags folds and clustids
+                # But slightly shrink the domain if possible. These are often the continous fields for which previous flattening and na removal is no option
                 in_a_cluster = (~ds['clustid'].isnull()).any(['lag','fold']) # 2D, False if not in a cluster
                 in_a_cluster = in_a_cluster.stack({'latlon':['latitude','longitude']}) # 1D for boolean indexing
                 in_a_cluster = in_a_cluster[in_a_cluster]
@@ -170,40 +171,30 @@ for inputpath in files:
                 ta = TimeAggregator(datapath = anompath, share_input = True, reduce_input = False, region = subdomain) # We are going to do a full aggregation once, to cover all lags and clustids
                 mean = ta.compute(nprocs = NPROC, ndayagg = int(timeagg), method = 'mean', firstday = firstday, rolling = True)
                 del ta
-                mean = mean[np.logical_or(mean.time.dt.season == 'MAM',mean.time.dt.season == 'JJA'),...] # Throw away some values to reduce memoty cost of grouping but still keeping the ability to lag into previous season.
+                mean = mean[np.logical_or(mean.time.dt.season == 'MAM',mean.time.dt.season == 'JJA'),...] # Throw away some values to reduce memory but still keeping the ability to lag into previous season. For big files this is the operation, copying of data has occurred
                 ds = ds.reindex_like(mean) # Since the time aggregated version has the potential to be a spatial subset
                 ds[mean.name] = mean # Should not copy the data
+                ds = ds.stack({'stacked':['latitude','longitude']}) # Stacking only once. Needed for the boolean indexing
+            
+            else:
+                logging.info(f'variable in to_reduce, proceeding to flattened aggregation once, for all combinations')
+                # We are also going to do a full aggregation once to cover all lags folds and clustids
+                # But including flattening and na removal option and we keep the timeaggregated field flat
+                ta = TimeAggregator(datapath = anompath, share_input = True, reduce_input = True) 
+                mean = ta.compute(nprocs = NPROC, ndayagg = int(timeagg), method = 'mean', firstday = firstday, rolling = True) # Still flat
+                del ta
+                mean = mean[np.logical_or(mean.time.dt.season == 'MAM',mean.time.dt.season == 'JJA'),...] # Throw away some values to reduce memoty cost of grouping but still keeping the ability to lag into previous season.
+                ds = ds.stack({'stacked':['latitude','longitude']}).reindex_like(mean) # 'stacked' matches the name created in the flattening in TimeAggregator. the way the dimensions do not match is because ds is still the full correlation field while mean has all nan-s removed. Okay to use the remaining to index correlation. A nan value would never result in a correlated cell.
+                ds[mean.name] = mean 
 
-                for partkey in todo.droplevel(['clustid','metric']).drop_duplicates(): 
-                    fold,_,_,lag,_ = partkey
-                    subset = ds.sel(lag = lag, fold = fold).stack({'latlon':['latitude','longitude']}) # 1D otherwise boolean indexing is not supported, fortunately this stacking currently happens per fold and lag, and then we retrieve and loop further over the corresponding todo clustid and metric combinations. Masking and subsetting is probably also what happens internally with groupby
-                    for fullkey in todo[todo.get_locs((fold,slice(None),slice(None),lag))]:
-                        _,_,_,_,_,clustid,metric = fullkey
-                        clustid_mask = subset['clustid'] == clustid # To discard other clustids and nan-field
-                        result = actual_dimreduction(stacked_subset = subset, clustid_mask = clustid_mask, metric = metric, lag = lag, anomaly_name = mean.name)
-                        result.columns = pd.MultiIndex.from_tuples([fullkey], names = todo.names)
-                        output.write_to_file(result, trim_fake_fold = fakefold)
-                del mean, ds
-            else: # In this case the loop is organized differently. Sub-domain/aggregation per lag per clustid and per fold because there can be pretty big differences
-                logging.info('variable in to_reduce, proceeding to aggregation per lag, clustid and fold')
-                for partkey in todo.droplevel('metric').drop_duplicates():
-                    fold,_,_,lag,_,clustid = partkey
-                
-                    in_this_cluster = ds['clustid'].sel(lag = lag, fold = fold) == clustid
-                    in_this_cluster = in_this_cluster.stack({'latlon':['latitude','longitude']})
-                    in_this_cluster = in_this_cluster[in_this_cluster] 
-                    subdomain = Region('subdomain', float(in_this_cluster.latitude.max()), float(in_this_cluster.longitude.min()), float(in_this_cluster.latitude.min()), float(in_this_cluster.longitude.max())) 
-                    ta = TimeAggregator(datapath = anompath, share_input = True, reduce_input = False, reduce_dtype = True, region = subdomain) 
-                    mean = ta.compute(nprocs = NPROC, ndayagg = int(timeagg), method = 'mean', firstday = firstday, rolling = True)
-                    del ta
-                    mean = mean[np.logical_or(mean.time.dt.season == 'MAM',mean.time.dt.season == 'JJA'),...] # Throw away some values to reduce memoty cost of grouping but still keeping the ability to lag into previous season.
-                    subset = ds.sel(lag = lag, fold = fold).reindex_like(mean) # Since the time aggregated version has the potential to be a spatial subset
-                    subset[mean.name] = mean
-                    subset = subset.stack({'latlon':['latitude','longitude']})
-                    clustid_mask = subset['clustid'] == clustid
-                    # Find the missing metrics too 
-                    for fullkey in todo[todo.get_locs((fold,slice(None),slice(None),lag,slice(None),clustid))]:
-                        _,_,_,_,_,_,metric = fullkey
-                        result = actual_dimreduction(stacked_subset = subset, clustid_mask = clustid_mask, metric = metric, lag = lag, anomaly_name = mean.name)
-                        result.columns = pd.MultiIndex.from_tuples([fullkey], names = todo.names)
-                        output.write_to_file(result, trim_fake_fold = fakefold)
+            # So now with both cases we have a stacked timeaggregated field, and unique pattern fields per lag and fold with which we can make subsets per clustid, so that is what we'll do
+            for partkey in todo.droplevel('metric').drop_duplicates(): 
+                fold,_,_,lag,_,clustid = partkey
+                subset = ds.sel(lag = lag, fold = fold) # retrieving the subset needs to happen only once to then further loop over the metric combinations
+                clustid_mask = subset['clustid'] == clustid
+                for fullkey in todo[todo.get_locs((fold,slice(None),slice(None),lag,slice(None),clustid))]:
+                    _,_,_,_,_,_,metric = fullkey
+                    result = actual_dimreduction(stacked_subset = subset, clustid_mask = clustid_mask, metric = metric, lag = lag, anomaly_name = mean.name)
+                    result.columns = pd.MultiIndex.from_tuples([fullkey], names = todo.names)
+                    output.write_to_file(result, trim_fake_fold = fakefold)
+            del mean, ds
