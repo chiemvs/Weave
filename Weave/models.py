@@ -236,6 +236,7 @@ def permute_importance(model: Callable, X_in, y_in, X_val = None, y_val = None, 
     perm_imp_kwargs are mainly computational arguments
     unlike shapley values, permutation importance is computed on the validation folds always
     """
+    logging.debug(f'PermImp will be started on validation, scoring by {evaluation_fn} with {scoring_strategy} as most important')
     if single_only:
         perm_imp_kwargs['nimportant_vars'] = 1 # Only one pass neccessary
 
@@ -295,7 +296,7 @@ def compute_forest_shaps(model: Callable, X_in, y_in, X_val = None, y_val = None
     Cross-validation if X_val and y_val are not supplied
     """
     assert sample in ['standard','negative','positive']
-    max_samples = 5 #500
+    max_samples = 500
     logging.debug(f'TreeShap will be started for {"validation" if on_validation else "training"}, with background data from {"validation" if not bg_from_training else "training"}, event sampling is {sample}')
     # Use similar setup as fit_predict_evaluate, with an inner_func that is potentially called multiple times
     def inner_func(model, X_train, y_train, X_val: pd.DataFrame, y_val: pd.Series) -> pd.DataFrame:

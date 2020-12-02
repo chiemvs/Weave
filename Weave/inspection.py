@@ -57,22 +57,22 @@ class ImportanceData(object):
         Path discovery according: basepath/respagg/separation/*.parquet
         Path discovery for X and y is inputpath / precursor.multiagg.parquet and inputpath / response.multiagg.trended.parquet
         If you wish a custom y either supply .y attribute directly or operate on it
-        conversion of index datatypes (string to integer)
+        conversion of index datatypes (string to integer) but not needed for newest way of storing
         """
         def read_singlefile(fullpath):
             data = pd.read_parquet(fullpath) 
             if not hasattr(self, 'is_shap'):
                 self.is_shap = 'expected_value' in data.index.get_level_values('variable')
-                #TODO: rewrite below
             if self.is_shap:
-                expected = data.loc[:,'expected_value'].copy() # Copied as series
-                data = data.drop('expected_value',level = 0, axis = 1)
-                data.columns = data.columns.remove_unused_levels() # Necessary because otherwise '' of the expected value at other levels will remain in it, and conversion to int will fail
-                data = data.T # transposing because otherwise multiple separations (files) cannot be concatenated by row (with separation in the columns). Fold will not be present in the zeroth axis (in contrast to permimp)
+                expected = data.loc[data.index.get_loc_level('expected_value','variable')[0],:].copy() # Copied as a Dataframe with folds as the index, time still in columns
+                expected.index = expected.index.get_level_values('fold')
+                data = data.drop('expected_value',level = 'variable', axis = 0)
+                data.index = data.index.remove_unused_levels() # Necessary because otherwise the potential '' when expected value did not have dummy values for other levels will mess up string conversion to int, but not even neccesary when shaps were saved correctly
             for index_name in self.integer_indices:
                 try:
                     level = data.index.names.index(index_name)
-                    data.index.set_levels(data.index.levels[level].astype(int), level = level, inplace = True)
+                    if not data.index.levels[level].dtype == int:
+                        data.index.set_levels(data.index.levels[level].astype(int), level = level, inplace = True)
                 except ValueError: # Name is not in the index
                     pass
             if self.is_shap:
@@ -106,8 +106,8 @@ class ImportanceData(object):
             self.X = pd.read_parquet(X_path).T 
         if self.is_shap:
             # Prepare the expected values and load the X data
-            self.expvals = pd.concat(expected_values, keys = keys, axis = 1).T # concatenation as columns, not present because they were series. Want to transpose to match shapley sample format
-            self.expvals.index.names = ['respagg','separation'] 
+            self.expvals = pd.concat(expected_values, keys = keys, axis = 0) # concatenation as columns, not present because they were series
+            self.expvals.index.names = ['respagg','separation'] + self.expvals.index.names[2:] 
         if y_too:
             y_path = list(inputpath.glob('response.multiagg.trended.parquet'))[0]
             self.y = pd.read_parquet(y_path).T # summer only 
@@ -204,7 +204,7 @@ class MapInterface(object):
         self.anompath = anompath
         self.presentvars = []
 
-    def get_field(self, variable: str, timeagg: int, separation: int, what: str = 'clustid') -> xr.DataArray:
+    def get_field(self, fold: int, variable: str, timeagg: int, separation: int, what: str = 'clustid') -> xr.DataArray:
         """
         Extracts and returns one (lat/lon) array from the dataset
         'what' denotes the array to get: possibilities are clustid and correlation
@@ -216,7 +216,7 @@ class MapInterface(object):
             if not timeagg in da.coords['timeagg']:
                 self.load_one_dataset(variable = variable, timeagg = timeagg) # da needs to be reloaded
         # a problem arises with da[{'timeagg':timeagg,'separation':separation}] because separation (negative) is interpreted as positional arguments not a label value
-        da = getattr(self, variable)[what].sel(timeagg = timeagg, separation = separation)
+        da = getattr(self, variable)[what].sel(fold = fold, timeagg = timeagg, separation = separation)
         return da
 
     def cache_everything(self) -> None:
@@ -249,14 +249,14 @@ class MapInterface(object):
     def map_to_fields(self, imp: pd.Series, remove_unused: bool = True) -> FacetMapResult:
         """
         Mapping a selection of properly indexed importance data to the clustids
-        associated to the variables/timeaggs/separations 
+        associated to the folds/variables/timeaggs/separations 
         it finds the unique groups. attemps mapping
         respagg does not play any role (not a property of input)
         returns a multiindex for the groups and a list with the filled clustid fields
         """
         assert 'clustid' in imp.index.names, 'mapping to fields by means of clustid, should be present in index, not be reduced over'
         assert isinstance(imp, pd.Series), 'Needs to be a series (preferably with meaningful name) otherwise indexing will fail'
-        def map_to_field(impvals: pd.Series, variable: str, timeagg: int, separation: int, remove_unused: bool) -> xr.DataArray:
+        def map_to_field(impvals: pd.Series, fold: int, variable: str, timeagg: int, separation: int, remove_unused: bool) -> xr.DataArray:
             """ 
             does a single field. for all unique non-nan clustids in the field
             it calls a boolean comparison. Values not belonging are kept 
@@ -265,15 +265,16 @@ class MapInterface(object):
             The only way this repeated call can go wrong is if 
             the assigned importance has the exact value of a clustid integer called later
             """
-            logging.debug(f'attempt field read and importance mapping for {variable}, timeagg {timeagg}, separation {separation}')
-            clustidmap = self.get_field(variable = variable, timeagg = timeagg, separation = separation, what = 'clustid').copy() # Copy because replacing values. Don't want that to happen to our cached dataset
+            logging.debug(f'attempt field read and importance mapping for {variable}, fold {fold}, timeagg {timeagg}, separation {separation}')
+            clustidmap = self.get_field(fold = fold, variable = variable, timeagg = timeagg, separation = separation, what = 'clustid').copy() # Copy because replacing values. Don't want that to happen to our cached dataset
             ids_in_map = np.unique(clustidmap) # still nans possible
             ids_in_map = ids_in_map[~np.isnan(ids_in_map)].astype(int) 
             ids_in_imp = impvals.index.get_level_values('clustid')
             assert len(ids_in_imp) <= len(ids_in_map), 'importance series should not have more clustids than are contained in the corresponding map field'
             for clustid in ids_in_map:
+                logging.debug(f'attempting mask for map clustid {clustid}')
                 if clustid in ids_in_imp:
-                    clustidmap = clustidmap.where(clustidmap != clustid, other = impvals.iloc[ids_in_imp == clustid][0]) # Boolean statement is where the values are maintaned. Other states where (if true) the value is taken from
+                    clustidmap = clustidmap.where(clustidmap != clustid, other = impvals.iloc[ids_in_imp == clustid].iloc[0]) # Boolean statement is where the values are maintaned. Other states where (if true) the value is taken from
                 elif remove_unused:
                     clustidmap = clustidmap.where(clustidmap != clustid, other = np.nan)
                 else:
@@ -281,13 +282,13 @@ class MapInterface(object):
             clustidmap.name = impvals.name
             return clustidmap 
 
-        grouped = imp.groupby(['variable','timeagg','separation']) # Discover what is in the imp series
+        grouped = imp.groupby(['fold','variable','timeagg','separation']) # Discover what is in the imp series
         results = [] 
         keys = [] 
         for key, series in grouped: # key tuple is composed of (variable, timeagg, separation)
             results.append(map_to_field(series, *key, remove_unused = remove_unused))
             keys.append(key) 
-        keys = pd.MultiIndex.from_tuples(keys, names = ['variable','timeagg','separation'])
+        keys = pd.MultiIndex.from_tuples(keys, names = ['fold','variable','timeagg','separation'])
         return FacetMapResult(keys, None, results)
 
     def get_anoms(self, imp: Union[pd.Series, pd.DataFrame], timestamp: pd.Timestamp = None, mask_with_clustid: bool = True, correlation_too: bool = True) -> FacetMapResult:
@@ -491,7 +492,7 @@ def barplot(impdf: Union[pd.Series,pd.DataFrame], n_most_important = 10, ignore_
     return fig, axes
 
 
-def scatterplot(impdf: ):
+def scatterplot(impdf: pd.DataFrame):
     pass
     # Row wise a single row is needed. Then the corresponding X and y series are retrieved
     # Needs adaptation to handle time-axis less permutation importance dataframes

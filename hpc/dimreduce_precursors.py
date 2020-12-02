@@ -29,7 +29,7 @@ from Weave.inputoutput import Writer, Reader
 from Weave.utils import agg_time, Region
 from Weave.dimreduction import spatcov_multilag, mean_singlelag
 
-logging.basicConfig(filename= TMPDIR / 'dimreduce_precursors3.log', filemode='w', level=logging.DEBUG, format='%(process)d-%(relativeCreated)d-%(message)s')
+logging.basicConfig(filename= TMPDIR / 'dimreduce_precursors.log', filemode='w', level=logging.DEBUG, format='%(process)d-%(relativeCreated)d-%(message)s')
 firstday = pd.Timestamp('1981-01-01')
 responseclustid = 9
 timeaggs = [1, 3, 5, 7, 11, 15, 21, 31] 

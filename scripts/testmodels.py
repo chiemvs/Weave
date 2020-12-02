@@ -6,24 +6,27 @@ import matplotlib.pyplot as plt
 import logging
 from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
 from sklearn.metrics import brier_score_loss
+from pathlib import Path
 
 #sys.path.append('/usr/people/straaten/Documents/Weave/')
 sys.path.append('..')
 from Weave.models import compute_forest_shaps, fit_predict, fit_predict_evaluate, permute_importance, map_foldindex_to_groupedorder
 from Weave.utils import get_timeserie_properties, brier_score_clim, collapse_restore_multiindex
+from Weave.inspection import ImportanceData, MapInterface
 
 logging.basicConfig(level = logging.DEBUG)
 
 Y_path = '/scistor/ivm/jsn295/clusters_cv_spearmanpar_varalpha/response.multiagg.detrended.parquet'
-X_path = '/scistor/ivm/jsn295/clusters_cv_spearmanpar_varalpha/precursor.multiagg.parquet'
-y = pd.read_parquet(Y_path).loc[:,(slice(None),15,slice(None))].iloc[:,0] # Only summer, starting 1981
-X = pd.read_parquet(X_path).loc[y.index, (slice(None),slice(None),slice(None),slice(None),-15,slice(None),'mean')].dropna(axis = 0, how = 'any') # A single separation, extra level because of fold
+X_path = Path('/scistor/ivm/jsn295/clusters_cv_spearmanpar_varalpha/precursor.multiagg.parquet')
+y = pd.read_parquet(Y_path).loc[:,(slice(None),5,slice(None))].iloc[:,0] # Only summer, starting 1981
+X = pd.read_parquet(X_path).loc[y.index, (slice(None),slice(None),slice(None),slice(None),-7,slice(None),'spatcov')].dropna(axis = 0, how = 'any') # A single separation, extra level because of fold
 y = y.reindex(X.index)
-y = y > y.quantile(0.8)
+threshold = 0.8
+y = y > y.quantile(threshold)
 
 # Testing the relabeling according to new grouped order
 map_foldindex_to_groupedorder(X = X, n_folds = 5)
-props = X.apply(get_timeserie_properties, axis = 0, **{'scale_trend_intercept':False})
+#props = X.apply(get_timeserie_properties, axis = 0, **{'scale_trend_intercept':False})
 
 # Testing a classifier
 r2 = RandomForestClassifier(max_depth = 5, n_estimators = 1500, min_samples_split = 20, max_features = 0.15, n_jobs = 10) # Balanced class weight helps a lot.
@@ -31,11 +34,21 @@ r2 = RandomForestClassifier(max_depth = 5, n_estimators = 1500, min_samples_spli
 #test = fit_predict_evaluate(r2, X, y, n_folds = 5, evaluate_kwds = evaluate_kwds) 
 #preds = fit_predict(r2, X, y, n_folds = 5)
 #bs = brier_score_loss(y,preds)
+#bsc = brier_score_clim(threshold)
 
-#test = permute_importance(r2, X, y, evaluation_fn = brier_score_loss, scoring_strategy = 'argmax_of_mean', perm_imp_kwargs = dict(njobs = 10, nbootstrap = 1, nimportant_vars = 1), single_only = False, n_folds = 5, split_on_year = True)
-shappies = compute_forest_shaps(r2, X, y, on_validation = False, bg_from_training = True, sample = 'standard', n_folds = 5, split_on_year = True)
-#test = fit_predict(r2, X, y, n_folds = 5) # evaluate_kwds = dict(scores = [brier_score_loss,log_loss], score_names = ['bs','ll'])
-#test.index = test.index.droplevel(0)
+#test = permute_importance(r2, X, y, evaluation_fn = brier_score_loss, scoring_strategy = 'argmax_of_mean', perm_imp_kwargs = dict(njobs = 10, nbootstrap = 1, nimportant_vars = 2), single_only = False, n_folds = 5, split_on_year = True)
+#shappies = compute_forest_shaps(r2, X, y, on_validation = False, bg_from_training = True, sample = 'standard', n_folds = 5, split_on_year = True)
+
+df = ImportanceData(Path('/scistor/ivm/jsn295/testshap'), respagg = 5, separation = -7)
+df.load_data(inputpath = X_path.parent)
+
+sample = df.df.loc[(5,[3,4],['siconc_nhmin'],[31]),:].iloc[:,1500] # shap siconc importance of seriesat some day 1500. Defined for fold 3 and 4 because it was computed on training data
+m = MapInterface(X_path.parent)
+result = m.map_to_fields(sample)
+
+
+
+
 #data = np.stack([y.values,test.values], axis = -1)
 #from utils import bootstrap, brier_score_clim 
 #f = bootstrap(5000, return_numeric = True, quantile = [0.05,0.5,0.95])(evaluate)

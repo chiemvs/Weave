@@ -1,5 +1,5 @@
 #!/usr/bin/bash
-#SBATCH --job-name="eps"
+#SBATCH --job-name="cluster"
 #SBATCH --nodelist=node242
 #SBATCH --nodes=1
 #SBATCH --cpus-per-task=20
