@@ -380,7 +380,7 @@ def dotplot(df: pd.Series, custom_order: list = None, sizescaler = 50, alphascal
     global_min = plotdf[imp_var].max() # Needs updating to the selected variables
     global_max = plotdf[imp_var].min() 
     for i, variable in enumerate(custom_order):
-        paneldf = plotdf.loc[df.index.get_loc_level(key = variable, level = 'variable')[0],:] # Nice, now you don't have to know where in the levels 'variable' is to match the amount of required slice(None) in the slicing tuple
+        paneldf = plotdf.iloc[df.index.get_loc_level(key = variable, level = 'variable')[0],:] # Nice, now you don't have to know where in the levels 'variable' is to match the amount of required slice(None) in the slicing tuple
         global_min = min(global_min, paneldf[imp_var].min())
         global_max = max(global_max, paneldf[imp_var].max())
         rgba_colors = np.zeros((len(paneldf),4),dtype = 'float64')
