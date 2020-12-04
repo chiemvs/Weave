@@ -32,17 +32,24 @@ from Weave.dimreduction import spatcov_multilag, mean_singlelag
 logging.basicConfig(filename= TMPDIR / 'dimreduce_precursors.log', filemode='w', level=logging.DEBUG, format='%(process)d-%(relativeCreated)d-%(message)s')
 firstday = pd.Timestamp('1981-01-01')
 responseclustid = 9
+spatial_quantile = 0.8 # Set to None if you want to extract the spatial mean instead of a quantile
 timeaggs = [1, 3, 5, 7, 11, 15, 21, 31] 
 # Response timeseries is not linked to any of the processing of the response
 # Only the starting date is important. 
 # We will make a seperate response dataframe now first
 # Only rolling aggregation is possible for intercomparing timescales, as those are equally (daily) stamped
-response_output = OUTDIR / '.'.join(['response','multiagg','detrended','parquet']) 
+if spatial_quantile is None:
+    response_output = OUTDIR / '.'.join(['response','multiagg','detrended','parquet']) 
+else:
+    response_output = OUTDIR / '.'.join(['response','multiagg',f'q{spatial_quantile}','detrended','parquet']) 
 if not response_output.exists():
     logging.debug(f'no previously existing file found at {response_output}')
     response = xr.open_dataarray(ANOMDIR / 't2m_europe.anom.nc')
     clusterfield = xr.open_dataarray(CLUSTERDIR / 't2m-q095.nc').sel(nclusters = 15)
-    reduced = response.groupby(clusterfield).mean('stacked_latitude_longitude')
+    if spatial_quantile is None:
+        reduced = response.groupby(clusterfield).mean('stacked_latitude_longitude')
+    else:
+        reduced = response.groupby(clusterfield).quantile(q = spatial_quantile, dim = 'stacked_latitude_longitude')
     reduced = reduced.sel(clustid = responseclustid) # In this case cluster 9 is western europe.
     response.close()
     output = []

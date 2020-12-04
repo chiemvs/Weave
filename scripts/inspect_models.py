@@ -26,10 +26,8 @@ from Weave.models import hyperparam_evaluation, permute_importance, compute_fore
 
 logging.basicConfig(filename= TMPDIR / 'shapley_negative_train.log', filemode='w', level=logging.DEBUG, format='%(process)d-%(relativeCreated)d-%(message)s')
 
-path_other = PATTERNDIR / 'precursor.other.multiagg.parquet'
-path_snow = PATTERNDIR / 'precursor.snowsea.multiagg.parquet'
 path_complete = PATTERNDIR / 'precursor.multiagg.parquet'
-path_y = PATTERNDIR / 'response.multiagg.trended.parquet'
+path_y = PATTERNDIR / 'response.multiagg.detrended.parquet'
 
 def merge_data():
     # Merging the snow and other dimreduced timeseries to the complete timeseries

@@ -16,25 +16,31 @@ from Weave.inspection import ImportanceData, MapInterface
 
 logging.basicConfig(level = logging.DEBUG)
 
+threshold = 0.8
+separation = -1 
+respagg = 3 
 Y_path = '/scistor/ivm/jsn295/clusters_cv_spearmanpar_varalpha_strict/response.multiagg.detrended.parquet'
+#Y_path = '/scistor/ivm/jsn295/clusters_cv_spearmanpar_varalpha_strict/response.multiagg.q0.8.detrended.parquet'
 X_path = Path('/scistor/ivm/jsn295/clusters_cv_spearmanpar_varalpha_strict/precursor.multiagg.parquet')
-y = pd.read_parquet(Y_path).loc[:,(slice(None),11,slice(None))].iloc[:,0] # Only summer, starting 1981
-X = pd.read_parquet(X_path).loc[y.index, (slice(None),slice(None),slice(None),slice(None),-15,slice(None),'spatcov')].dropna(axis = 0, how = 'any') # A single separation, extra level because of fold
+y = pd.read_parquet(Y_path).loc[:,(slice(None),respagg,slice(None))].iloc[:,0] # Only summer, starting 1981
+#y = y.loc[y.index.month.map(lambda m: m in [7,8])] # THis is an optional subsetting to only July/ August. should not change the ordering
+X = pd.read_parquet(X_path).loc[y.index, (slice(None),slice(None),slice(None),slice(None),separation,slice(None),'spatcov')].dropna(axis = 0, how = 'any') # A single separation, extra level because of fold
 y = y.reindex(X.index)
-threshold = 0.75
 y = y > y.quantile(threshold)
-
-# Testing the relabeling according to new grouped order
+#
+## Testing the relabeling according to new grouped order
 map_foldindex_to_groupedorder(X = X, n_folds = 5)
-#props = X.apply(get_timeserie_properties, axis = 0, **{'scale_trend_intercept':False})
-
-# Testing a classifier
-#r2 = RandomForestClassifier(max_depth = 5, n_estimators = 1500, min_samples_split = 20, max_features = 0.15, n_jobs = 10) # Balanced class weight helps a lot.
+##props = X.apply(get_timeserie_properties, axis = 0, **{'scale_trend_intercept':False})
+#
+## Testing a classifier
+r2 = RandomForestClassifier(max_depth = 4, n_estimators = 1500, min_samples_split = 20, max_features = 0.15, n_jobs = 15) # Balanced class weight helps a lot.
 evaluate_kwds = dict(scores = [brier_score_loss], score_names = ['bs'])
 #test = fit_predict_evaluate(r2, X, y, n_folds = 5, evaluate_kwds = evaluate_kwds) 
-#preds = fit_predict(r2, X, y, n_folds = 5)
+preds = fit_predict(r2, X, y, n_folds = 5)
 #bs = brier_score_loss(y,preds)
-bsc = brier_score_clim(threshold)
+#bsc = brier_score_clim(threshold)
+#print(f'separation: {separation}, respagg: {respagg}, threshold: {threshold}')
+#print(f'skill: {1 - bs/bsc}, bsc: {bsc}, test: {test}')
 
 #test = permute_importance(r2, X, y, evaluation_fn = brier_score_loss, scoring_strategy = 'argmax_of_mean', perm_imp_kwargs = dict(njobs = 10, nbootstrap = 1, nimportant_vars = 2), single_only = False, n_folds = 5, split_on_year = True)
 #shappies = compute_forest_shaps(r2, X, y, on_validation = False, bg_from_training = True, sample = 'standard', n_folds = 5, split_on_year = True)
@@ -57,12 +63,15 @@ bsc = brier_score_clim(threshold)
 #ret = f(data, **evaluate_kwds)
 #ret2 = f2(data, **evaluate_kwds)
 
-hyperparams = dict(min_samples_split = [20,30], max_depth = [4,5,8])
-#hyperparams = dict(min_impurity_decrease = [0.001,0.002,0.003,0.005,0.01])
-#hyperparams = dict(max_features = [0.05,0.1,0.15,0.2,0.25])
-other_kwds = dict(n_jobs = 20, n_estimators = 1500, max_features = 0.15) 
-ret = hyperparam_evaluation(RandomForestClassifier, X, y, hyperparams, other_kwds,  fit_predict_evaluate_kwds = dict(properties_too = True, n_folds = 5, evaluate_kwds = evaluate_kwds))
-
+#hyperparams = dict(min_samples_split = [20,25,30], max_depth = [4,5,8])
+##hyperparams = dict(min_impurity_decrease = [0.001,0.002,0.003,0.005,0.01])
+#hyperparams = dict(min_samples_split = [20,30,40], max_depth = [7,8,9])
+##other_kwds = dict(n_jobs = 20, n_estimators = 1500, max_features = 0.15) 
+#other_kwds = dict(n_jobs = 25, max_features = 35, n_estimators = 1500) 
+#ret = hyperparam_evaluation(RandomForestClassifier, X, y, hyperparams, other_kwds, fit_predict_evaluate_kwds = dict(properties_too = False, n_folds = 5, evaluate_kwds = evaluate_kwds))
+#mean = ret.groupby('score', axis = 0).mean()
+#
+#score_only = ret.loc[(slice(None),'bs'),:].round(3).T
 #def wrapper(self, *args, **kwargs):
 #    return self.predict_proba(*args,**kwargs)[:,-1] # Last class is True
 #RandomForestClassifier.predict = wrapper # To avoid things inside permutation importance package  

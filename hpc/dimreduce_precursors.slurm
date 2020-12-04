@@ -1,7 +1,7 @@
 #!/usr/bin/bash
 #SBATCH --job-name="dimred"
 #SBATCH --nodes=1
-#SBATCH --nodelist=node242
+#SBATCH --nodelist=node240
 #SBATCH --cpus-per-task=58
 #SBARCH --mem=125gb
 #SBATCH --time=120:00:00
