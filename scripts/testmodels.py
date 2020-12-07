@@ -33,10 +33,10 @@ map_foldindex_to_groupedorder(X = X, n_folds = 5)
 ##props = X.apply(get_timeserie_properties, axis = 0, **{'scale_trend_intercept':False})
 #
 ## Testing a classifier
-r2 = RandomForestClassifier(max_depth = 4, n_estimators = 1500, min_samples_split = 20, max_features = 0.15, n_jobs = 15) # Balanced class weight helps a lot.
-evaluate_kwds = dict(scores = [brier_score_loss], score_names = ['bs'])
+#r2 = RandomForestClassifier(max_depth = 4, n_estimators = 1500, min_samples_split = 20, max_features = 0.15, n_jobs = 15) # Balanced class weight helps a lot.
+#evaluate_kwds = dict(scores = [brier_score_loss], score_names = ['bs'])
 #test = fit_predict_evaluate(r2, X, y, n_folds = 5, evaluate_kwds = evaluate_kwds) 
-preds = fit_predict(r2, X, y, n_folds = 5)
+#preds = fit_predict(r2, X, y, n_folds = 5)
 #bs = brier_score_loss(y,preds)
 #bsc = brier_score_clim(threshold)
 #print(f'separation: {separation}, respagg: {respagg}, threshold: {threshold}')
@@ -45,8 +45,8 @@ preds = fit_predict(r2, X, y, n_folds = 5)
 #test = permute_importance(r2, X, y, evaluation_fn = brier_score_loss, scoring_strategy = 'argmax_of_mean', perm_imp_kwargs = dict(njobs = 10, nbootstrap = 1, nimportant_vars = 2), single_only = False, n_folds = 5, split_on_year = True)
 #shappies = compute_forest_shaps(r2, X, y, on_validation = False, bg_from_training = True, sample = 'standard', n_folds = 5, split_on_year = True)
 
-#df = ImportanceData(Path('/scistor/ivm/jsn295/testshap'), respagg = 5, separation = -7)
-#df.load_data(inputpath = X_path.parent)
+df = ImportanceData(Path('/scistor/ivm/jsn295/shap_standard_val_q08'), respagg = 3, separation = -1)
+df.load_data(inputpath = X_path.parent)
 #
 #sample = df.df.loc[(5,[3,4],['siconc_nhmin'],[31]),:].iloc[:,1500] # shap siconc importance of seriesat some day 1500. Defined for fold 3 and 4 because it was computed on training data
 #m = MapInterface(X_path.parent)

@@ -397,28 +397,34 @@ def brier_score_clim(p: float) -> float:
     """
     return p*(p-1)**2 + (1-p)*p**2
 
-def reliability_plot(y_true: pd.Series, y_probs: Union[pd.Series,pd.DataFrame], nbins: int = 10):
+def reliability_plot(y_true: Union[pd.Series,pd.DataFrame], y_probs: Union[pd.Series,pd.DataFrame], nbins: int = 10, fig = None):
     """
     Computes the calibration curve for probabilistic predictions of a binary variable
-    The true binary labels are supplied by y_true
+    The true binary labels are supplied by y_true (these can also be multiple columns, although then their number should match y_probs)
     The matching probabilistic predictions (same row-index) are supplied in y_probs,
     different predictions can be supplied as columns 
     These predictions are binned and for each bin the corresponding frequency is computed
     returns the figure and two axes
     """
     assert np.all(y_true.index == y_probs.index), 'indices should match'
+    if isinstance(y_true, pd.DataFrame):
+        assert len(y_true.columns) == len(y_probs.columns), 'Youve supplied y_true as a Dataframe, make sure the columns match y_probs, or if only a single y series is desired, supply as pd.Series'
+        multiple_y = True
+    else:
+        multiple_y = False
 
-    fig = plt.figure(figsize=(7,7))
-    ax1 = plt.subplot2grid((3, 1), (0, 0), rowspan=2)
-    ax2 = plt.subplot2grid((3, 1), (2, 0))
+    if fig is None:
+        fig = plt.figure(figsize=(7,7))
+    ax1 = plt.subplot2grid((3, 1), (0, 0), rowspan=2, fig = fig)
+    ax2 = plt.subplot2grid((3, 1), (2, 0), fig = fig)
 
     ax1.plot([0, 1], [0, 1], "k:", label="Perfect")
     ax2.set_yscale('log')
     if isinstance(y_probs, pd.Series):
         y_probs = y_probs.to_frame()
 
-    for column_tuple in y_probs.columns:
-        fraction_of_positives, mean_predicted_value = calibration_curve(y_true, y_probs[column_tuple], n_bins=nbins)
+    for i, column_tuple in enumerate(y_probs.columns):
+        fraction_of_positives, mean_predicted_value = calibration_curve(y_true.iloc[:,[i]] if multiple_y else y_true, y_probs[column_tuple], n_bins=nbins)
         ax1.plot(mean_predicted_value,fraction_of_positives, 's-',label = str(column_tuple))
         ax2.hist(y_probs[column_tuple], range=(0,1), bins=nbins, histtype="step", lw=2)
 

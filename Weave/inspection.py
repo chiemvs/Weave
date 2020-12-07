@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Union, List, Tuple
 
 from .processing import TimeAggregator
+from .models import map_foldindex_to_groupedorder
 from .utils import collapse_restore_multiindex
 
 def scale_high_to_high(series: pd.Series, fill_na: bool = False):
@@ -103,7 +104,11 @@ class ImportanceData(object):
         if X_too or self.is_shap:
             assert not inputpath is None, 'For X_too (automatic with shap) please supply an inputpath'
             X_path = list(inputpath.glob('precursor.multiagg.parquet'))[0]
-            self.X = pd.read_parquet(X_path).T 
+            X = pd.read_parquet(X_path) 
+            if 'fold' in X.columns.names:
+                n_folds = len(X.columns.get_level_values('fold').unique())  
+                map_foldindex_to_groupedorder(X, n_folds = n_folds)
+            self.X = X.T # Transposing to match the storage of perm imp and shap
         if self.is_shap:
             # Prepare the expected values and load the X data
             self.expvals = pd.concat(expected_values, keys = keys, axis = 0) # concatenation as columns, not present because they were series
