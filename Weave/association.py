@@ -80,9 +80,9 @@ def lag_subset_detrend_associate(spatial_index: tuple):
             # For non-cv asofuncs we feed the two dataarrays (n_obs,) of the precursor (x) and (y), for cv we to provide input as pandas and capture output of the crossvalidated function, all that should be already in asofunc
             out_index = (laglist.index(lag), slice(None), slice(None)) + spatial_index # Remember the shape of (len(lagrange),self.n_folds,2) + spatdims. So regardless of crossval at least one fold is mimiced
             if do_crossval:
-                outarray[out_index] = asofunc(X_in = X_set.to_pandas(), y_in = y_set.to_pandas()) # Outarray returns a dataframe
+                outarray[out_index] = asofunc(X_in = X_set.to_pandas().to_frame() if X_set.ndim == 1 else X_set.to_pandas(), y_in = y_set.to_pandas()) # Outarray returns a dataframe. We want X_set as a dataframe in there (even when 1D) because of time axis sorting and recording in potial grouped Kfold asofunc
             else:
-                outarray[out_index] = var_dict['asofunc'](X_set, y_set) # Asofunc should accept two 1D data arrays and return (corr,pvalue)
+                outarray[out_index] = asofunc(X_set, y_set) # Asofunc should accept two 1D data arrays and return (corr,pvalue)
 
 class Associator(Computer):
 

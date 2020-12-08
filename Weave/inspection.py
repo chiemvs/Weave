@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Union, List, Tuple
 
 from .processing import TimeAggregator
-from .models import map_foldindex_to_groupedorder
+from .models import map_foldindex_to_groupedorder, get_validation_fold_time, crossvalidate
 from .utils import collapse_restore_multiindex
 
 def scale_high_to_high(series: pd.Series, fill_na: bool = False):
@@ -106,15 +106,15 @@ class ImportanceData(object):
             X_path = list(inputpath.glob('precursor.multiagg.parquet'))[0]
             X = pd.read_parquet(X_path) 
             if 'fold' in X.columns.names:
-                n_folds = len(X.columns.get_level_values('fold').unique())  
-                map_foldindex_to_groupedorder(X, n_folds = n_folds)
+                self.n_folds = len(X.columns.get_level_values('fold').unique())  
+                map_foldindex_to_groupedorder(X, n_folds = self.n_folds)
             self.X = X.T # Transposing to match the storage of perm imp and shap
         if self.is_shap:
             # Prepare the expected values and load the X data
             self.expvals = pd.concat(expected_values, keys = keys, axis = 0) # concatenation as columns, not present because they were series
             self.expvals.index.names = ['respagg','separation'] + self.expvals.index.names[2:] 
         if y_too:
-            y_path = list(inputpath.glob('response.multiagg.trended.parquet'))[0]
+            y_path = list(inputpath.glob('response.multiagg.detrended.parquet'))[0]
             self.y = pd.read_parquet(y_path).T # summer only 
             # We drop the variable (t2m-anom) and clustid labels, as these are meaningless for the matching to importances. And we need to change timeagg to respagg 
             self.y.index = pd.Index(self.y.index.get_level_values('timeagg'), name = 'respagg') 
@@ -125,9 +125,18 @@ class ImportanceData(object):
         When for instance the selection index or columns still have 'fold' in them, this won't work, because it is not present in X. This is also the mechanism with which you slice the X's to summer and spatcov values only
         absent levels are therefore dropped
         """
-        not_present_in_index = [name for name in target.index.names if not name in toreindex.index.names]
-        not_present_in_columns = [name for name in target.columns.names if not name in toreindex.columns.names]
-        return toreindex.reindex(index = target.index.droplevel(not_present_in_index), columns = target.columns.droplevel(not_present_in_columns))
+        not_present_in_index = [target.index.names.index(name) for name in target.index.names if not name in toreindex.index.names] # Level numbers
+        not_present_in_columns = [target.columns.names.index(name) for name in target.columns.names if not name in toreindex.columns.names] # Level numbers
+        try:
+            target_index = target.index.droplevel(not_present_in_index) 
+        except ValueError: # Cannot drop all levels, basically there is no index to compare against
+            target_index = None
+        try:
+            target_columns = target.columns.droplevel(not_present_in_columns)
+        except ValueError:
+            target_columns = None
+
+        return toreindex.reindex(index = target_index, columns = target_columns)
     
     def get_matching_X(self, selection: pd.DataFrame) -> pd.DataFrame:
         return self.get_matching(getattr(self,'X'), selection)
@@ -480,9 +489,9 @@ def barplot(impdf: Union[pd.Series,pd.DataFrame], n_most_important = 10, ignore_
         impdf = pd.DataFrame(impdf) # Just so we can loop over columns
     
     if impdf.columns.nlevels > 1: # Dropping levels on axis = 1 for easier plot titles
-        impdf, oldcolnames = collapse_restore_multiindex(impdf, axis = 1)
+        impdf, oldcolnames, dtypes = collapse_restore_multiindex(impdf, axis = 1)
     if impdf.index.nlevels > 1: # Also dropping on axis = 0 
-        impdf, oldrownames = collapse_restore_multiindex(impdf, axis = 0, ignore_level = ignore_in_names)
+        impdf, oldrownames, dtypes = collapse_restore_multiindex(impdf, axis = 0, ignore_level = ignore_in_names)
 
     ncols = impdf.shape[-1]
     fig, axes = plt.subplots(nrows = 1, ncols = ncols, squeeze = False, sharex = True, figsize = (4*ncols,4))
@@ -497,8 +506,46 @@ def barplot(impdf: Union[pd.Series,pd.DataFrame], n_most_important = 10, ignore_
     return fig, axes
 
 
-def scatterplot(impdf: pd.DataFrame):
-    pass
-    # Row wise a single row is needed. Then the corresponding X and y series are retrieved
-    # Needs adaptation to handle time-axis less permutation importance dataframes
-    # An option is loading y (diregarding axis) and loading X fully (and subsetting it with y. Which is saved as a summersubset)
+def scatterplot(impdata: ImportanceData, selection: pd.DataFrame, alpha = 0.5, quantile: float = None, ignore_in_names = ['respagg','lag','metric']):
+    """
+    scatterplot of X vs y, X is chosen by the row of impdf 
+    Two colors. One for the validation fold, one for the training, if X variables depend on the fold
+    The exceedence quantile can be added as a horizontal line
+    """
+    X_full = impdata.get_matching_X(selection) # columns is the time axis
+    y_summer = impdata.get_matching_y(selection) # columns is the time axis
+    X_summer = X_full.loc[:,y_summer.columns]
+
+    assert X_summer.shape[0] == 1, 'Currently only accepts a single selected X variable, change selection'
+    fig, axes = plt.subplots(nrows = 1, ncols = 1, squeeze = False, sharey = True, figsize = (5,5))
+    ax = axes[0,0]
+
+    if hasattr(impdata, 'n_folds'):
+        """
+        Then we want to map which part of the X and y series is training and which part is not
+        """
+        f = crossvalidate(impdata.n_folds, True,True)(get_validation_fold_time)
+        foldslices = f(X_in = y_summer.T, y_in = y_summer.T) # Sorted order
+        foldslices.index = foldslices.index.droplevel('time')
+        selected_fold_iloc = foldslices.index.get_loc(int(X_summer.index.get_level_values('fold').values))
+        start_selected_fold = foldslices.iloc[selected_fold_iloc] # Start of the validation period
+        try: 
+            end_selected_fold = foldslices.iloc[selected_fold_iloc + 1] # End of the validation fold
+        except IndexError:
+            end_selected_fold = None
+        validation_indexer = slice(start_selected_fold,end_selected_fold)
+        train_indexer = ~y_summer.columns.isin(y_summer.loc[:,validation_indexer].columns) # Inverting the slice
+        ax.scatter(x = X_summer.loc[:,train_indexer].values.squeeze(), y = y_summer.loc[:,train_indexer].values.squeeze(), alpha = alpha, label = 'train')
+        ax.scatter(x = X_summer.loc[:,validation_indexer].values.squeeze(), y = y_summer.loc[:,validation_indexer].values.squeeze(), alpha = alpha, label = 'validation')
+        ax.set_title(f'validation: {validation_indexer}')
+    else:
+        ax.scatter(x = X_summer.values.squeeze(), y = y_summer.values.squeeze(), alpha = alpha, label = 'full')
+
+    # Some general annotation
+    if not quantile is None:
+        ax.hlines(y = y_summer.quantile(quantile, axis = 1), xmin = X_summer.min(axis = 1), xmax = X_summer.max(axis =1), label = f'q{quantile}') # y was loaded as already detrended
+    ax.legend()
+    ax.set_xlabel(f'{X_summer.index[0]}')
+    ax.set_ylabel(f'response agg: {y_summer.index[0]}')
+
+    return fig, axes
