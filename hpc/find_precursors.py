@@ -47,11 +47,12 @@ files.remove('swvl3_europe.anom.nc')
 files.remove('z300_nhmin.anom.nc') # Only nhnorm retained
 files.remove('z500_europe.anom.nc') # too similar to z300
 to_reduce = ['snowc','siconc'] # Variables that are reduced and stacked etc, such that they are not too large for parallel association
-#files = ['sst_nhplus.anom.nc', 'z300_nhnorm.anom.nc', 'swvl13_europe.anom.nc']
+is_partial = False
 
-#asofunc = spearmanr_par
-asofunc = crossvalidate(5,True,True)(prepare_scipy_stats_for_crossval(spearmanr_par)) # Sorting based on validation timeslice start data is set to true
-#asofunc = crossvalidate(5,True,True)(prepare_scipy_stats_for_crossval(spearmanr)) # Sorting based on validation timeslice start data is set to true
+if is_partial:
+    asofunc = crossvalidate(5,True,True)(prepare_scipy_stats_for_crossval(spearmanr_par)) # Sorting based on validation timeslice start data is set to true
+else:
+    asofunc = crossvalidate(5,True,True)(prepare_scipy_stats_for_crossval(spearmanr)) # Sorting based on validation timeslice start data is set to true
 
 timeaggs = [1, 3, 5, 7, 11, 15, 21, 31] # Block/rolling aggregations.
 # Open a precursor array
@@ -60,10 +61,12 @@ for timeagg in timeaggs:
     laglist = [0,] + list(-timeagg - absolute_separation) # Dynamic lagging to avoid overlap, lag zero is the overlap
     # Aggregate the response, subset and detrend
     responseagg = agg_time(array = reduced, ndayagg = timeagg, method = 'mean', rolling = True, firstday = pd.Timestamp('1981-01-01'))
-    response_t1 = np.column_stack([responseagg[timeagg:],responseagg[:-timeagg]]) # First column is concurrent. 2nd is value from one step back (t-1)
-    response_t1 = xr.DataArray(response_t1, dims = ('time','what'), coords = {'time':responseagg.coords['time'][timeagg:], 'what':['t0','t-1']})
-    summersubset = response_t1[response_t1.time.dt.season == 'JJA']
-    #summersubset = responseagg[responseagg.time.dt.season == 'JJA']
+    if is_partial:
+        response_t1 = np.column_stack([responseagg[timeagg:],responseagg[:-timeagg]]) # First column is concurrent. 2nd is value from one step back (t-1)
+        response_t1 = xr.DataArray(response_t1, dims = ('time','what'), coords = {'time':responseagg.coords['time'][timeagg:], 'what':['t0','t-1']})
+        summersubset = response_t1[response_t1.time.dt.season == 'JJA']
+    else:
+        summersubset = responseagg[responseagg.time.dt.season == 'JJA']
     summersubset.values = detrend(summersubset.values, axis = 0)
     for inputfile in files:
         # Investigate the precursors
@@ -74,7 +77,7 @@ for timeagg in timeaggs:
             ta = TimeAggregator(datapath = ANOMDIR / inputfile, share_input = True, reduce_input = (varname in to_reduce))
             mean = ta.compute(nprocs = NPROC, ndayagg = timeagg, method = 'mean', firstday = pd.Timestamp(responseagg.time[0].values), rolling = True)
             del ta
-            ac = Associator(responseseries = summersubset, data = mean, laglist = laglist, association = asofunc, timeagg = timeagg, is_partial = True, n_folds = 5)
+            ac = Associator(responseseries = summersubset, data = mean, laglist = laglist, association = asofunc, timeagg = timeagg, is_partial = is_partial, n_folds = 5)
             del mean
             corr = ac.compute(NPROC, alpha = 5*10**(-4 - 0.3*(timeagg-1))) #5*10**(-4 - 0.2*(timeagg-1))) # Variable alpha, used to ranges from 5e-6 to 5e-12 for timeaggs 1 to 31, now 5e-4 to 5e-10. Also stry 5e-5 to 5e-13
             if varname in to_reduce:
