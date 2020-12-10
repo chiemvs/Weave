@@ -334,25 +334,35 @@ def compute_forest_shaps(model: Callable, X_in, y_in, X_val = None, y_val = None
     else:
         return inner_func(model = model, X_train = X_in, y_train = y_in, X_val = X_val, y_val = y_val) 
 
-def get_validation_fold_time(X_train, y_train, X_val: pd.DataFrame, y_val: Union[pd.Series, pd.DataFrame]) -> pd.Series:
+def get_validation_fold_time(X_train, y_train, X_val: pd.DataFrame, y_val: Union[pd.Series, pd.DataFrame], end_too: bool = False) -> pd.Series:
     """
     Small util to get the first timestamp of the validation fold 
     belonging to the k-th index of the k-fold crossvalidation
+    option to return the end too
     Useful for split_on_year because the ordering in time can get permuted
     f = crossvalidate(k,bool,bool)(get_validation_fold_time)
     f(X_in,y_in)
     """
     timeindex = y_val.index[[0]]
-    return pd.Series(timeindex, index = timeindex)
+    if not end_too:
+        return pd.Series(timeindex, index = timeindex, name = 'valstart') # Also in index for automatic sorting in crossvalidate
+    else:
+        endindex = y_val.index[-1]
+        return pd.DataFrame([[timeindex[0],endindex]], index = timeindex, columns = ['valstart','valend'])
 
-def map_foldindex_to_groupedorder(X: pd.DataFrame, n_folds: int) -> None:
+def map_foldindex_to_groupedorder(X: pd.DataFrame, n_folds: int, return_foldorder: bool = False) -> None:
     """
     Mapping the chronological validation fold index (clusters are stored that way) to the foldorder
     as defined by the grouped k-fold cross validation
     Make sure the timeseries in X are completely clipped in time
     Performed inplace
+    Option to return an intermediate product (namely beginning of the slices, indexed by newfold, and with the sorted oldfold also)
     """
     f = crossvalidate(n_folds, True, True)(get_validation_fold_time) # sorting needs to be activated because then we how the indices line up chronologically
-    foldorder = f(X_in = X, y_in = X) 
+    foldorder = f(X_in = X, y_in = X, end_too = return_foldorder) # Extracting extra info if we want the intermediate product, creates a dataframe instead of a series
     index_to_order = pd.Series(foldorder.index.droplevel('time'), index = pd.RangeIndex(len(foldorder)))
     X.columns.set_levels(index_to_order, level = X.columns.names.index('fold'), inplace = True)
+    if return_foldorder:
+        foldorder.index = foldorder.index.droplevel('time')
+        return foldorder.assign(fieldfold = range(n_folds)) 
+

@@ -105,9 +105,10 @@ class ImportanceData(object):
             assert not inputpath is None, 'For X_too (automatic with shap) please supply an inputpath'
             X_path = list(inputpath.glob('precursor.multiagg.parquet'))[0]
             X = pd.read_parquet(X_path) 
+            X = X.iloc[X.index.get_level_values('time').month.map(lambda m: m in [6,7,8]),:] # Seasonal subset starting at 1981 if correctly saved, for a correct grouped CV split when applied
             if 'fold' in X.columns.names:
                 self.n_folds = len(X.columns.get_level_values('fold').unique())  
-                map_foldindex_to_groupedorder(X, n_folds = self.n_folds)
+                self.lookup = map_foldindex_to_groupedorder(X, n_folds = self.n_folds, return_foldorder = True) # For later use in loading maps
             self.X = X.T # Transposing to match the storage of perm imp and shap
         if self.is_shap:
             # Prepare the expected values and load the X data
@@ -260,13 +261,14 @@ class MapInterface(object):
             setattr(self, variable, xr.concat([getattr(self,variable), ds], dim = 'timeagg')) 
             logging.debug(f'{variable} was present, concatenated timeagg {timeagg} to existing')
 
-    def map_to_fields(self, imp: pd.Series, remove_unused: bool = True) -> FacetMapResult:
+    def map_to_fields(self, impdata: ImportanceData, imp: pd.Series, remove_unused: bool = True) -> FacetMapResult:
         """
         Mapping a selection of properly indexed importance data to the clustids
         associated to the folds/variables/timeaggs/separations 
         it finds the unique groups. attemps mapping
         respagg does not play any role (not a property of input)
         returns a multiindex for the groups and a list with the filled clustid fields
+        The original impdata object needs to be supplied because of the lookup table to get the fieldfold numbers belonging to regular fold 
         """
         assert 'clustid' in imp.index.names, 'mapping to fields by means of clustid, should be present in index, not be reduced over'
         assert isinstance(imp, pd.Series), 'Needs to be a series (preferably with meaningful name) otherwise indexing will fail'
@@ -280,7 +282,9 @@ class MapInterface(object):
             the assigned importance has the exact value of a clustid integer called later
             """
             logging.debug(f'attempt field read and importance mapping for {variable}, fold {fold}, timeagg {timeagg}, separation {separation}')
-            clustidmap = self.get_field(fold = fold, variable = variable, timeagg = timeagg, separation = separation, what = 'clustid').copy() # Copy because replacing values. Don't want that to happen to our cached dataset
+            fieldfold = impdata.lookup.loc[fold,'fieldfold'] 
+            logging.debug(f'Fold {fold} leads to fieldfold {fieldfold}')
+            clustidmap = self.get_field(fold = fieldfold, variable = variable, timeagg = timeagg, separation = separation, what = 'clustid').copy() # Copy because replacing values. Don't want that to happen to our cached dataset
             ids_in_map = np.unique(clustidmap) # still nans possible
             ids_in_map = ids_in_map[~np.isnan(ids_in_map)].astype(int) 
             ids_in_imp = impvals.index.get_level_values('clustid')
@@ -524,20 +528,12 @@ def scatterplot(impdata: ImportanceData, selection: pd.DataFrame, alpha = 0.5, q
         """
         Then we want to map which part of the X and y series is training and which part is not
         """
-        f = crossvalidate(impdata.n_folds, True,True)(get_validation_fold_time)
-        foldslices = f(X_in = y_summer.T, y_in = y_summer.T) # Sorted order
-        foldslices.index = foldslices.index.droplevel('time')
-        selected_fold_iloc = foldslices.index.get_loc(int(X_summer.index.get_level_values('fold').values))
-        start_selected_fold = foldslices.iloc[selected_fold_iloc] # Start of the validation period
-        try: 
-            end_selected_fold = foldslices.iloc[selected_fold_iloc + 1] # End of the validation fold
-        except IndexError:
-            end_selected_fold = None
-        validation_indexer = slice(start_selected_fold,end_selected_fold)
+        selected_fold = int(X_summer.index.get_level_values('fold').values)
+        validation_indexer = slice(impdata.lookup.loc[selected_fold,'valstart'],impdata.lookup.loc[selected_fold,'valend'])
         train_indexer = ~y_summer.columns.isin(y_summer.loc[:,validation_indexer].columns) # Inverting the slice
         ax.scatter(x = X_summer.loc[:,train_indexer].values.squeeze(), y = y_summer.loc[:,train_indexer].values.squeeze(), alpha = alpha, label = 'train')
         ax.scatter(x = X_summer.loc[:,validation_indexer].values.squeeze(), y = y_summer.loc[:,validation_indexer].values.squeeze(), alpha = alpha, label = 'validation')
-        ax.set_title(f'validation: {validation_indexer}')
+        ax.set_title(f'validation: {validation_indexer.start.strftime("%Y-%m-%d")} - {validation_indexer.stop.strftime("%Y-%m-%d")}')
     else:
         ax.scatter(x = X_summer.values.squeeze(), y = y_summer.values.squeeze(), alpha = alpha, label = 'full')
 
