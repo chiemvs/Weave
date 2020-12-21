@@ -17,7 +17,7 @@ timeseriespath = Path(sys.argv[4])
 OUTPUTDIR = Path(sys.argv[5])
 sys.path.append(PACKAGEDIR)
 from Weave.utils import brier_score_clim, bootstrap
-from Weave.models import fit_predict, evaluate, map_foldindex_to_groupedorder
+from Weave.models import fit_predict, evaluate, map_foldindex_to_groupedorder, BaseExceedenceModel
 
 def read_prepare_data(responseagg = 3, separation = -7, quantile: float = 0.9):
     """
@@ -25,26 +25,27 @@ def read_prepare_data(responseagg = 3, separation = -7, quantile: float = 0.9):
     A dataframe and a Series
     also does the classification step with exceeding a quantile threshold
     """
-    path_y = timeseriespath / 'response.multiagg.detrended.parquet'
+    path_y = timeseriespath / 'response.multiagg.trended.parquet'
     path_X = timeseriespath / 'precursor.multiagg.parquet'
     y = pd.read_parquet(path_y).loc[:,(slice(None),responseagg,slice(None))].iloc[:,0] # Only summer
-    X = pd.read_parquet(path_X).loc[y.index,(slice(None),slice(None),slice(None),slice(None),separation,slice(None),'spatcov')].dropna(axis = 0, how = 'any')
+    X = pd.read_parquet(path_X).loc[y.index,(slice(None),slice(None),slice(None),slice(None),separation,slice(None),slice(None))].dropna(axis = 0, how = 'any')
     y = y.reindex(X.index) # Shape matching because of possible Nan's 
     y = y > y.quantile(quantile)
-    logging.debug(f'read y from {path_y} at resptimeagg {responseagg} already detrended, exceeding quantile {quantile}, and read dimreduced X from {path_X} at separation {separation}')
+    logging.debug(f'read y from {path_y} at resptimeagg {responseagg} trended, exceeding quantile {quantile}, and read dimreduced X from {path_X} at separation {separation}')
     map_foldindex_to_groupedorder(X = X, n_folds = 5)
     logging.debug('restored fold oreder on dimreduced X')
     return X, y
 
 def get_classif_bs(X, y, hyperparams: dict, blocksizes: list = [None]):
-    r2 = RandomForestClassifier(**hyperparams) 
+    #r2 = RandomForestClassifier(**hyperparams) 
+    r2 = BaseExceedenceModel()
     outcomes = fit_predict(r2, X, y, n_folds = 5)
     """
     procedure to drop the fourth fold
     """
-    foldsubset = outcomes.index.get_loc_level(4,'fold')[0]
-    outcomes = outcomes.iloc[~foldsubset]
-    y = y.iloc[~foldsubset]
+    #foldsubset = outcomes.index.get_loc_level(4,'fold')[0]
+    #outcomes = outcomes.iloc[~foldsubset]
+    #y = y.iloc[~foldsubset]
     """
     Till here
     """

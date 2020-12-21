@@ -7,6 +7,7 @@ import numpy as np
 import pandas as pd
 import itertools
 import logging
+import warnings
 try:
     import shap
 except ImportError:
@@ -17,9 +18,99 @@ from collections import OrderedDict
 from sklearn.model_selection import KFold, GroupKFold
 from sklearn.metrics import mean_squared_error, r2_score, mean_absolute_error
 from sklearn.ensemble import RandomForestRegressor, RandomForestClassifier
+from sklearn.linear_model import LogisticRegression
+from sklearn.preprocessing import StandardScaler
 from PermutationImportance import sklearn_permutation_importance
 
 from .utils import collapse_restore_multiindex 
+
+class BaseExceedenceModel(LogisticRegression):
+    """
+    Base model for trended binary exceedence response 
+    Modeled with a time-dependent logistic regression (one coefficient)
+    Only the (scaled) time axis of any X input is used
+    """
+    def __init__(self, penalty = 'l2', C = 1.0, fit_intercept = True, *args, **kwargs) -> pd.Series:
+        LogisticRegression.__init__(self, penalty = penalty, C = C, fit_intercept = fit_intercept, *args, **kwargs)
+
+    def __repr__(self):
+        return f'LogisticRegression with scaled time index as only input: penalty={self.penalty}, C={self.C}, fit_intercept={self.fit_intercept}'
+
+    def transform_input(self, X: Union[pd.Series, pd.DataFrame], force: bool = True) -> pd.Series:
+        """
+        Extracting only the time axis from the input
+        Scaling coefficients are estimated on the training data. Scaled it will converge and
+        penalize better
+        """
+        X = X.index.to_julian_date().values[:,np.newaxis]
+        if force: # Recalibrate the scaling coefficients
+            self.scaler = StandardScaler(copy = True, with_mean = True, with_std = True)
+            X = self.scaler.fit_transform(X) # leads to attributes .mean_ and .var_
+        else:
+            assert hasattr(self, 'scaler'), 'Scaling was called from predict but no scaler was present. Call fit first with training data'
+            X = self.scaler.transform(X)
+        return X
+
+    def fit(self, X, y):
+        """
+        Modification of the original fit to fit only on the time-axis of X
+        """
+        LogisticRegression.fit(self = self, X = self.transform_input(X, force = True), y = y)
+        assert len(self.coef_) == 1, 'Only one feature (namely time) should be used in the fitting'
+        if (self.coef_ < 0).any():
+            warnings.warn('BaseExceedenceModel shows a negative dependence on time, so a negative climate change trend. Is your procedure for creating y correct?')
+
+    def predict(self, X) -> pd.Series: 
+        """
+        Modification of the original predict_proba function
+        Only returning the probability of True. indexed with X.index
+        """
+        two_class_preds = LogisticRegression.predict_proba(self = self, X = self.transform_input(X, force = False))
+        one_class_preds = two_class_preds[:,self.classes_.tolist().index(True)]
+        return pd.Series(one_class_preds, index = X.index)
+
+class HybridExceedenceModel(object):
+    """
+    Binary trended response variable (two classes)
+    is tackled with a base model plus a Random Forest
+    The base logistic-regression classifier uses only the time axis (so climate change)
+    to model the changing base rate.
+    Then the response is tranformed by subtracting the base rate 
+    The residual 'probabilistic anomaly' is then treated as a regression problem.
+    """
+    def __init__(self, *rfargs, **rfkwargs):
+        """
+        The supplied args and kwargs need to be for the RandomForestRegressor, e.g. hyperparams
+        """
+        self.base = BaseExceedenceModel()
+        self.rf = RandomForestRegressor(*rfargs, **rfkwargs)
+
+    def __repr__(self):
+        return f'Hybrid combination with {self.rf} on top of {self.base}'
+
+    def fit(self, X, y):
+        """
+        Fit & predict base rate trend of True in training response data
+        Create new probalistic anomalie response with possible scale: [-1, 1]
+        """
+        self.base.fit(X = X, y = y)
+        baserate = self.base.predict(X = X) # Uses only the time axis of X, predicting the training data
+        probabilistic_anoms = y - baserate # Bool minus numeric 
+        self.rf.fit(X = X, y = probabilistic_anoms)
+
+    def predict(self, X):
+        """
+        Inherently a probabilistic prediction like predict_proba, but only the single 'True' class
+        Because of this the loss (and permutation importance can still be evaluated with e.g. brier score
+        Predictions need be clipped to [0, 1]
+        """
+        baserate = self.base.predict(X) # Predicting with fitted baserate model 
+        probabilistic_anoms = self.rf.predict(X = X)  # [-1 to 1]
+        predictions = baserate + probabilistic_anoms # Becomes a pandas Series because Baserate is so
+        logging.debug(f'Original probabilistic range of hybrid exceedence model: {predictions.min()} to {predictions.max()}') 
+        predictions.loc[predictions < 0] = 0
+        predictions.loc[predictions > 1] = 1
+        return predictions 
 
 def evaluate(data = None, y_true = None, y_pred = None, scores = [r2_score, mean_squared_error, mean_absolute_error], score_names = ['r2','mse','mae']) -> pd.Series:
     """

@@ -32,16 +32,17 @@ from Weave.dimreduction import spatcov_multilag, mean_singlelag
 logging.basicConfig(filename= TMPDIR / 'dimreduce_precursors.log', filemode='w', level=logging.DEBUG, format='%(process)d-%(relativeCreated)d-%(message)s')
 firstday = pd.Timestamp('1981-01-01')
 responseclustid = 9
-spatial_quantile = 0.8 # Set to None if you want to extract the spatial mean instead of a quantile
+spatial_quantile = None # Set to None if you want to extract the spatial mean instead of a quantile
+detrend_response = False
 timeaggs = [1, 3, 5, 7, 11, 15, 21, 31] 
 # Response timeseries is not linked to any of the processing of the response
 # Only the starting date is important. 
 # We will make a seperate response dataframe now first
 # Only rolling aggregation is possible for intercomparing timescales, as those are equally (daily) stamped
 if spatial_quantile is None:
-    response_output = OUTDIR / '.'.join(['response','multiagg','detrended','parquet']) 
+    response_output = OUTDIR / '.'.join(['response','multiagg','detrended' if detrend_response else 'trended','parquet']) 
 else:
-    response_output = OUTDIR / '.'.join(['response','multiagg',f'q{spatial_quantile}','detrended','parquet']) 
+    response_output = OUTDIR / '.'.join(['response','multiagg',f'q{spatial_quantile}','detrended' if detrend_response else 'trended','parquet']) 
 if not response_output.exists():
     logging.debug(f'no previously existing file found at {response_output}')
     response = xr.open_dataarray(ANOMDIR / 't2m_europe.anom.nc')
@@ -57,7 +58,11 @@ if not response_output.exists():
         responseagg = agg_time(array = reduced, ndayagg = responsetimeagg, method = 'mean', rolling = True, firstday = firstday)
         logging.debug(f'aggregated response to {responsetimeagg} day timeseries')
         summersubset = responseagg[responseagg.time.dt.season == 'JJA']
-        summersubset = pd.DataFrame(detrend(summersubset.values, axis = 0), index = summersubset.coords['time'].to_index(), columns = pd.MultiIndex.from_tuples([(summersubset.name,responsetimeagg,responseclustid)], names = ['variable','timeagg','clustid']))
+        if detrend_response:
+            summersubsetvals = detrend(summersubset.values, axis = 0) 
+        else:
+            summersubsetvals = summersubset.values 
+        summersubset = pd.DataFrame(summersubsetvals, index = summersubset.coords['time'].to_index(), columns = pd.MultiIndex.from_tuples([(summersubset.name,responsetimeagg,responseclustid)], names = ['variable','timeagg','clustid']))
         # Smallest aggregation should be a reasonable starting point (it has the largest length)
         # But large chance that all have all summer timesteps (left stamping causes this only at the end of the anomaly series)
         output.append(summersubset)
