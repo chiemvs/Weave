@@ -17,7 +17,7 @@ timeseriespath = Path(sys.argv[4])
 OUTPUTDIR = Path(sys.argv[5])
 sys.path.append(PACKAGEDIR)
 from Weave.utils import brier_score_clim, bootstrap
-from Weave.models import fit_predict, evaluate, map_foldindex_to_groupedorder, BaseExceedenceModel
+from Weave.models import fit_predict, evaluate, map_foldindex_to_groupedorder, BaseExceedenceModel, HybridExceedenceModel
 
 def read_prepare_data(responseagg = 3, separation = -7, quantile: float = 0.9):
     """
@@ -38,8 +38,11 @@ def read_prepare_data(responseagg = 3, separation = -7, quantile: float = 0.9):
 
 def get_classif_bs(X, y, hyperparams: dict, blocksizes: list = [None]):
     #r2 = RandomForestClassifier(**hyperparams) 
-    r2 = BaseExceedenceModel()
-    outcomes = fit_predict(r2, X, y, n_folds = 5)
+    base = BaseExceedenceModel()
+    hybrid = HybridExceedenceModel(**hyperparams)
+    #outcomes_base = fit_predict(base, X_in = X, y_in = y, n_folds = 5)
+    outcomes_base = fit_predict(base, X_in = X, y_in = y, X_val = X, y_val = y) # Most strict non-cv basemodel
+    outcomes_hybrid = fit_predict(hybrid, X_in = X, y_in = y, n_folds = 5) 
     """
     procedure to drop the fourth fold
     """
@@ -49,17 +52,28 @@ def get_classif_bs(X, y, hyperparams: dict, blocksizes: list = [None]):
     """
     Till here
     """
-    data = np.stack([y.values,outcomes.values], axis = -1) # Preparing for bootstrap format
+    #data = np.stack([y.values,outcomes.values], axis = -1) # Preparing for bootstrap format
+    data = np.stack([y.values,outcomes_base.values,outcomes_hybrid.values], axis = -1) # Preparing for bootstrap format, 3 columns: 0 and 1 used for base(reference) score and 0 and 2 for hybrid score
     evaluate_kwds = dict(scores = [brier_score_loss], score_names = ['bs'])
+    def to_skillscore(dataarray, **evaluate_kwds):
+        """
+        Accepting a bootstrapped dataarray. Computes reference score from columns zero and one
+        and model score from columns zero and two. 
+        Returns the skillscore = 1 - model/reference for case where perfect scores equal 0.
+        """
+        referencescore = evaluate(dataarray[:,[0,1]], **evaluate_kwds)
+        modelscore = evaluate(dataarray[:,[0,2]], **evaluate_kwds)
+        return 1 - modelscore/referencescore
     bootstrap_quantiles = [0.05,0.5,0.95] 
     scores = np.full((len(blocksizes),len(bootstrap_quantiles)),np.nan)
     for i, blocksize in enumerate(blocksizes): # No recomputation of the fit is neccesary
-        evaluate_decor = bootstrap(5000, return_numeric = True, blocksize = blocksize, quantile = bootstrap_quantiles)(evaluate)
+        #evaluate_decor = bootstrap(5000, return_numeric = True, blocksize = blocksize, quantile = bootstrap_quantiles)(evaluate)
+        evaluate_decor = bootstrap(5000, return_numeric = True, blocksize = blocksize, quantile = bootstrap_quantiles)(to_skillscore)
         scores[i,:] = evaluate_decor(data, **evaluate_kwds)
-    return pd.DataFrame(scores, index = pd.Index(blocksizes, name = 'blocksize'), columns = pd.Index(bootstrap_quantiles, name = 'bs_quantile'))
+    return pd.DataFrame(scores, index = pd.Index(blocksizes, name = 'blocksize'), columns = pd.Index(bootstrap_quantiles, name = 'bss_quantile'))
 
 
-params = dict(max_depth = 7, n_estimators = 1500, min_samples_split = 40, max_features = 35, n_jobs = NPROC)
+params = dict(max_depth = 5, n_estimators = 2500, min_samples_split = 30, max_features = 35, n_jobs = NPROC)
 
 # First without any bootstrap types (more auto-correlated, more skillful with increasing timeagg)
 fullset = read_prepare_data(slice(None),slice(None))
@@ -69,11 +83,10 @@ del fullset
 
 outcomes = []
 keys = []
-for separation in separations: #[-31]: #[-31,-15,-7,-3,0]:
-    for timeagg in timeaggs: #[15]: 
+for separation in separations: 
+    for timeagg in timeaggs: 
         for quantile in [0.5,0.666,0.8,0.9]:
             test = get_classif_bs(*read_prepare_data(timeagg,separation,quantile), hyperparams = params, blocksizes = [None,5,15,30,60])
-            test['clim'] = brier_score_clim(quantile)
             outcomes.append(test)
             keys.append((timeagg,separation,quantile))
 

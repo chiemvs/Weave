@@ -10,9 +10,8 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 from pathlib import Path
-from sklearn.ensemble import RandomForestRegressor, RandomForestClassifier
+from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import brier_score_loss
-from scipy.signal import detrend
 from multiprocessing import Pool
 
 TMPDIR = Path(sys.argv[1])
@@ -22,23 +21,23 @@ PATTERNDIR = Path(sys.argv[4])
 OUTDIR = Path(sys.argv[5])
 
 sys.path.append(PACKAGEDIR)
-from Weave.models import hyperparam_evaluation, permute_importance, compute_forest_shaps, map_foldindex_to_groupedorder
+from Weave.models import permute_importance, compute_forest_shaps, map_foldindex_to_groupedorder, HybridExceedenceModel
 
 logging.basicConfig(filename= TMPDIR / 'permimp_val_q0666.log', filemode='w', level=logging.DEBUG, format='%(process)d-%(relativeCreated)d-%(message)s')
 
 path_complete = PATTERNDIR / 'precursor.multiagg.parquet'
-path_y = PATTERNDIR / 'response.multiagg.detrended.parquet'
+path_y = PATTERNDIR / 'response.multiagg.trended.parquet'
 
 def read_data(responseagg = 3, separation = -7, quantile: float = 0.8):
     """
     Returns the selcted X and y data
-    A dataframe and an (already detrended) Series
+    A dataframe and a trended Series
     """
     y = pd.read_parquet(path_y).loc[:,(slice(None),responseagg,slice(None))].iloc[:,0] # Only summer
-    X = pd.read_parquet(path_complete).loc[y.index,(slice(None),slice(None),slice(None),slice(None),separation,slice(None),'spatcov')].dropna(axis = 0, how = 'any')
+    X = pd.read_parquet(path_complete).loc[y.index,(slice(None),slice(None),slice(None),slice(None),separation,slice(None),slice(None))].dropna(axis = 0, how = 'any') # both metrics
     y = y.reindex(X.index)
     y = y > y.quantile(quantile)
-    logging.debug(f'read y from {path_y} at resptimeagg {responseagg} already detrended, exceeding quantile {quantile}, and read dimreduced X from {path_complete} at separation {separation}')
+    logging.debug(f'read y from {path_y} at resptimeagg {responseagg} trended, exceeding quantile {quantile}, and read dimreduced X from {path_complete} at separation {separation}')
     map_foldindex_to_groupedorder(X = X, n_folds = 5)
     logging.debug('restored fold order on dimreduced X')
     return X, y
@@ -72,11 +71,12 @@ def execute_perm_imp(respseptup):
     retpath = OUTDIR / str(responseagg) / str(separation)
     if not retpath.exists():
         X,y = read_data(responseagg = responseagg, separation = separation, quantile = 0.666)
-        def wrapper(self, *args, **kwargs):
-            return self.predict_proba(*args,**kwargs)[:,-1] # Last class is True
-        RandomForestClassifier.predict = wrapper # To avoid things inside permutation importance package  where it is only possible to invoke probabilistic prediction with twoclass y.
-        m = RandomForestClassifier(max_depth = 7, n_estimators = 1500, min_samples_split = 40, max_features = 35, n_jobs = njobs_per_imp)
-        ret = permute_importance(m, X_in = X, y_in = y, evaluation_fn = brier_score_loss, n_folds = 5, perm_imp_kwargs = dict(nimportant_vars = 20, njobs = njobs_per_imp, nbootstrap = 1500))
+        #def wrapper(self, *args, **kwargs):
+        #    return self.predict_proba(*args,**kwargs)[:,-1] # Last class is True
+        #RandomForestClassifier.predict = wrapper # To avoid things inside permutation importance package  where it is only possible to invoke probabilistic prediction with twoclass y.
+        #m = RandomForestClassifier(max_depth = 7, n_estimators = 1500, min_samples_split = 40, max_features = 35, n_jobs = njobs_per_imp)
+        model = HybridExceedenceModel(max_depth = 5, n_estimators = 2500, min_samples_split = 30, max_features = 35, n_jobs = njobs_per_imp)
+        ret = permute_importance(model, X_in = X, y_in = y, evaluation_fn = brier_score_loss, n_folds = 5, perm_imp_kwargs = dict(nimportant_vars = 30, njobs = njobs_per_imp, nbootstrap = 1500))
         retpath.mkdir(parents = True)
         pq.write_table(pa.Table.from_pandas(ret), retpath / 'responsagg_separation.parquet')
         logging.debug(f'subprocess has written out importance frame at {retpath}')

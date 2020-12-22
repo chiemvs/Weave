@@ -60,14 +60,14 @@ class BaseExceedenceModel(LogisticRegression):
         if (self.coef_ < 0).any():
             warnings.warn('BaseExceedenceModel shows a negative dependence on time, so a negative climate change trend. Is your procedure for creating y correct?')
 
-    def predict(self, X) -> pd.Series: 
+    def predict(self, X) -> np.ndarray: 
         """
         Modification of the original predict_proba function
-        Only returning the probability of True. indexed with X.index
+        Only returning the probability of True. not indexed (this is handled by e.g. fit_predict)
         """
         two_class_preds = LogisticRegression.predict_proba(self = self, X = self.transform_input(X, force = False))
         one_class_preds = two_class_preds[:,self.classes_.tolist().index(True)]
-        return pd.Series(one_class_preds, index = X.index)
+        return one_class_preds
 
 class HybridExceedenceModel(object):
     """
@@ -98,7 +98,7 @@ class HybridExceedenceModel(object):
         probabilistic_anoms = y - baserate # Bool minus numeric 
         self.rf.fit(X = X, y = probabilistic_anoms)
 
-    def predict(self, X):
+    def predict(self, X) -> np.ndarray:
         """
         Inherently a probabilistic prediction like predict_proba, but only the single 'True' class
         Because of this the loss (and permutation importance can still be evaluated with e.g. brier score
@@ -106,10 +106,9 @@ class HybridExceedenceModel(object):
         """
         baserate = self.base.predict(X) # Predicting with fitted baserate model 
         probabilistic_anoms = self.rf.predict(X = X)  # [-1 to 1]
-        predictions = baserate + probabilistic_anoms # Becomes a pandas Series because Baserate is so
-        logging.debug(f'Original probabilistic range of hybrid exceedence model: {predictions.min()} to {predictions.max()}') 
-        predictions.loc[predictions < 0] = 0
-        predictions.loc[predictions > 1] = 1
+        predictions = baserate + probabilistic_anoms # stays a numpy ndarray, necessary for comparibility with permutation importance. 
+        predictions[predictions < 0] = 0
+        predictions[predictions > 1] = 1
         return predictions 
 
 def evaluate(data = None, y_true = None, y_pred = None, scores = [r2_score, mean_squared_error, mean_absolute_error], score_names = ['r2','mse','mae']) -> pd.Series:
@@ -336,7 +335,8 @@ def permute_importance(model: Callable, X_in, y_in, X_val = None, y_val = None, 
         model.fit(X = X_train, y = y_train)
         y_val = y_val.to_frame() # Required form for perm imp
         _, names, dtypes = collapse_restore_multiindex(X_val, axis = 1, inplace = True) # Collapse of the index is required unfortunately for the column names
-        result = sklearn_permutation_importance(model = model, scoring_data = (X_val.values, y_val.values), evaluation_fn = evaluation_fn, scoring_strategy = scoring_strategy, variable_names = X_val.columns, **perm_imp_kwargs) # Pass the data as numpy arrays. Avoid bug in PermutationImportance, see scripts/minimum_example.py
+        #result = sklearn_permutation_importance(model = model, scoring_data = (X_val.values, y_val.values), evaluation_fn = evaluation_fn, scoring_strategy = scoring_strategy, variable_names = X_val.columns, **perm_imp_kwargs) # Pass the data as numpy arrays. Avoid bug in PermutationImportance, see scripts/minimum_example.py https://github.com/gelijergensen/PermutationImportance/issues/84
+        result = sklearn_permutation_importance(model = model, scoring_data = (X_val, y_val), evaluation_fn = evaluation_fn, scoring_strategy = scoring_strategy, variable_names = X_val.columns, **perm_imp_kwargs) # Pass the data as numpy arrays. Avoid bug in PermutationImportance, see scripts/minimum_example.py https://github.com/gelijergensen/PermutationImportance/issues/84
         singlepass = result.retrieve_singlepass()
         singlepass_rank_scores = pd.DataFrame([{'rank':tup[0], 'score':np.mean(tup[1])} for tup in singlepass.values()], index = singlepass.keys()) # We want to export both rank and mean score. (It is allowed to average here over all bootstraps even when this happens in one fold of the cross validation, as the grand mean will be equal as group sizes are equal over all cv-folds)
         _,_,_ = collapse_restore_multiindex(singlepass_rank_scores, axis = 0, names = names, dtypes = dtypes, inplace = True)

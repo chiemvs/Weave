@@ -17,9 +17,9 @@ from Weave.inspection import ImportanceData, MapInterface
 
 logging.basicConfig(level = logging.DEBUG)
 
-threshold = 0.8
-separation = -1 
-respagg = 3 
+threshold = 0.666
+separation = -15 
+respagg = 31 
 Y_path = '/scistor/ivm/jsn295/clusters_cv_spearmanpar_varalpha_strict/response.multiagg.trended.parquet'
 #Y_path = '/scistor/ivm/jsn295/clusters_cv_spearmanpar_varalpha_strict/response.multiagg.q0.8.detrended.parquet'
 X_path = Path('/scistor/ivm/jsn295/clusters_cv_spearmanpar_varalpha_strict/precursor.multiagg.parquet')
@@ -32,18 +32,9 @@ y = y > y.quantile(threshold)
 ## Testing the relabeling according to new grouped order
 map_foldindex_to_groupedorder(X = X, n_folds = 5, return_foldorder = False)
 ##props = X.apply(get_timeserie_properties, axis = 0, **{'scale_trend_intercept':False})
-#
-## Testing a classifier
-#r2 = RandomForestClassifier(max_depth = 4, n_estimators = 1500, min_samples_split = 20, max_features = 0.15, n_jobs = 15) # Balanced class weight helps a lot.
-#evaluate_kwds = dict(scores = [brier_score_loss], score_names = ['bs'])
-#test = fit_predict_evaluate(r2, X, y, n_folds = 5, evaluate_kwds = evaluate_kwds) 
-#preds = fit_predict(r2, X, y, n_folds = 5)
-#bs = brier_score_loss(y,preds)
-#bsc = brier_score_clim(threshold)
-#print(f'separation: {separation}, respagg: {respagg}, threshold: {threshold}')
-#print(f'skill: {1 - bs/bsc}, bsc: {bsc}, test: {test}')
 
-#test = permute_importance(r2, X, y, evaluation_fn = brier_score_loss, scoring_strategy = 'argmax_of_mean', perm_imp_kwargs = dict(njobs = 10, nbootstrap = 1, nimportant_vars = 2), single_only = False, n_folds = 5, split_on_year = True)
+model = HybridExceedenceModel(max_depth = 5, n_estimators = 2500, min_samples_split = 30, max_features = 35, n_jobs = 20)
+test = permute_importance(model, X_in = X, y_in = y, evaluation_fn = brier_score_loss, scoring_strategy = 'argmax_of_mean', perm_imp_kwargs = dict(njobs = 10, nbootstrap = 1, nimportant_vars = 2), single_only = False, n_folds = 5, split_on_year = True)
 #shappies = compute_forest_shaps(r2, X, y, on_validation = False, bg_from_training = True, sample = 'standard', n_folds = 5, split_on_year = True)
 
 #df = ImportanceData(Path('/scistor/ivm/jsn295/shap_standard_val_q08'), respagg = 3, separation = -1)
@@ -57,22 +48,15 @@ map_foldindex_to_groupedorder(X = X, n_folds = 5, return_foldorder = False)
 #f = crossvalidate(5,True,True)(get_validation_fold_time)
 #testi = f(X_in = y, y_in = y, end_too = True)
 
-#data = np.stack([y.values,test.values], axis = -1)
-#from utils import bootstrap, brier_score_clim 
-#f = bootstrap(5000, return_numeric = True, quantile = [0.05,0.5,0.95])(evaluate)
-#f2 = bootstrap(5000, blocksize = 15, return_numeric = True, quantile = [0.05,0.5,0.95])(evaluate) # object dtype array
 #evaluate_kwds = dict(scores = [brier_score_loss], score_names = ['bs'])
-#ret = f(data, **evaluate_kwds)
-#ret2 = f2(data, **evaluate_kwds)
-
-evaluate_kwds = dict(scores = [brier_score_loss], score_names = ['bs'])
-hyperparams = dict(min_samples_split = [20,30,40], max_depth = [7,8,9], max_features = [20,35])
-other_kwds = dict(n_jobs = 25, n_estimators = 1500) 
-ret = hyperparam_evaluation(HybridExceedenceModel, X, y, hyperparams, other_kwds, fit_predict_evaluate_kwds = dict(properties_too = False, n_folds = 5, evaluate_kwds = evaluate_kwds))
-mean = ret.groupby('score', axis = 0).mean()
-
-baseline = BaseExceedenceModel() # Most strict baseline (non-cv) that we can imagine, just for the idea of what the bs values mean
-bs = fit_predict_evaluate(baseline, X_in = X, y_in = y, X_val = X, y_val = y, evaluate_kwds = evaluate_kwds)
+#hyperparams = dict(n_estimators = [1500,2500,3500])
+#other_kwds = dict(n_jobs = 25, min_samples_split = 30, max_depth = 5, max_features = 35) 
+#ret = hyperparam_evaluation(HybridExceedenceModel, X, y, hyperparams, other_kwds, fit_predict_evaluate_kwds = dict(properties_too = False, n_folds = 5, evaluate_kwds = evaluate_kwds))
+#mean = ret.groupby('score', axis = 0).mean()
+#
+#baseline = BaseExceedenceModel() # Most strict baseline (non-cv) that we can imagine, just for the idea of what the bs values mean
+#bs = fit_predict_evaluate(baseline, X_in = X, y_in = y, X_val = X, y_val = y, evaluate_kwds = evaluate_kwds)
+#bs2 = brier_score_loss(y, fit_predict(baseline, X_in = X, y_in = y, n_folds = 5)) # Less strict (cv) baseline
 #
 #score_only = ret.loc[(slice(None),'bs'),:].round(3).T
 #def wrapper(self, *args, **kwargs):
