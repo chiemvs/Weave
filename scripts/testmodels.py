@@ -20,9 +20,10 @@ logging.basicConfig(level = logging.DEBUG)
 threshold = 0.666
 separation = -15 
 respagg = 31 
-Y_path = '/scistor/ivm/jsn295/clusters_cv_spearmanpar_varalpha_strict/response.multiagg.trended.parquet'
-#Y_path = '/scistor/ivm/jsn295/clusters_cv_spearmanpar_varalpha_strict/response.multiagg.q0.8.detrended.parquet'
-X_path = Path('/scistor/ivm/jsn295/clusters_cv_spearmanpar_varalpha_strict/precursor.multiagg.parquet')
+basepath = Path('/nobackup_1/users/straaten/shaptest/')
+#basepath = Path('/scistor/ivm/jsn295/clusters_cv_spearmanpar_varalpha_strict/')
+Y_path = basepath / 'response.multiagg.trended.parquet'
+X_path = basepath / 'precursor.multiagg.parquet'
 y = pd.read_parquet(Y_path).loc[:,(slice(None),respagg,slice(None))].iloc[:,0] # Only summer, starting 1981
 #y = y.loc[y.index.month.map(lambda m: m in [7,8])] # THis is an optional subsetting to only July/ August. should not change the ordering
 X = pd.read_parquet(X_path).loc[y.index, (slice(None),slice(None),slice(None),slice(None),separation,slice(None),slice(None))].dropna(axis = 0, how = 'any') # A single separation, extra level because of fold, reading both metrics
@@ -34,7 +35,7 @@ map_foldindex_to_groupedorder(X = X, n_folds = 5, return_foldorder = False)
 ##props = X.apply(get_timeserie_properties, axis = 0, **{'scale_trend_intercept':False})
 
 model = HybridExceedenceModel(max_depth = 5, n_estimators = 2500, min_samples_split = 30, max_features = 35, n_jobs = 20)
-test = permute_importance(model, X_in = X, y_in = y, evaluation_fn = brier_score_loss, scoring_strategy = 'argmax_of_mean', perm_imp_kwargs = dict(njobs = 10, nbootstrap = 1, nimportant_vars = 2), single_only = False, n_folds = 5, split_on_year = True)
+#test = permute_importance(model, X_in = X, y_in = y, evaluation_fn = brier_score_loss, scoring_strategy = 'argmax_of_mean', perm_imp_kwargs = dict(njobs = 10, nbootstrap = 1, nimportant_vars = 2), single_only = False, n_folds = 5, split_on_year = True)
 #shappies = compute_forest_shaps(r2, X, y, on_validation = False, bg_from_training = True, sample = 'standard', n_folds = 5, split_on_year = True)
 
 #df = ImportanceData(Path('/scistor/ivm/jsn295/shap_standard_val_q08'), respagg = 3, separation = -1)
@@ -72,11 +73,13 @@ Own function testing
 #df = compute_forest_shaps(model, X_train, y_train, X_val, y_val, sample = 'standard')
 #def compute_forest_shaps(model: Callable, X_in, y_in, X_val = None, y_val = None, on_validation = True, bg_from_training = True, sample = 'standard', n_folds = 10, split_on_year = True, explainer_kwargs = dict()) -> pd.DataFrame:
 
-# Maximum prediction: 
-#maxind = np.argmax(model.predict_proba(X_val)[:,-1])
 
 # Negative case background data (all from training. because there is more, max +- 570 positive in training)
-#bg_neg = shap.maskers.Independent(X_train.loc[~y_train,:], max_samples=50)
+#X_train = X #.loc[:,0] # Just testing with first fold
+#y_train = y
+#df = compute_forest_shaps(model, X_in = X_train, y_in = y_train, sample = 'standard', n_folds = 5)
+#dfn = compute_forest_shaps(model, X_train, y_train, X_val = X_train, y_val = y_train, sample = 'negative')
+#bg_neg = shap.maskers.Independent(X_train.loc[~y_train,:], max_samples=5)
 #bg_standard = shap.maskers.Independent(X_train, max_samples=50)
 #bg_pos = shap.maskers.Independent(X_train.loc[y_train,:], max_samples=50)
 

@@ -399,8 +399,11 @@ def compute_forest_shaps(model: Callable, X_in, y_in, X_val = None, y_val = None
             background = shap.maskers.Independent(X_bg_set.loc[~y_bg_set,:], max_samples = max_samples)
         else:
             background = shap.maskers.Independent(X_bg_set.loc[y_bg_set,:], max_samples = max_samples)
-        
-        explainer = shap.TreeExplainer(model = model, data = background, feature_perturbation = 'interventional', **explainer_kwargs)
+       
+        if isinstance(model, HybridExceedenceModel): # In this case we interpret the regressor in probability space, not the logistic base rate model for climate change beneath it.
+            explainer = shap.TreeExplainer(model = model.rf, data = background, feature_perturbation = 'interventional', **explainer_kwargs)
+        else:
+            explainer = shap.TreeExplainer(model = model, data = background, feature_perturbation = 'interventional', **explainer_kwargs)
 
         shap_values = explainer.shap_values(X_val if on_validation else X_train) # slow. Outputs a numpy ndarray or a list of them when classifying. We need to add columns and indices
         if isinstance(model, RandomForestClassifier):
