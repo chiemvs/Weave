@@ -360,34 +360,28 @@ def get_forest_properties(forest: Union[RandomForestRegressor,RandomForestClassi
     """
     needs a fitted forest, extracts properties of the decision tree estimators
     the amount of split nodes is always n_leaves - 1
-    flatness is derived by the ratio of the actual amount of n_leaves over n_leaves_for_a_flat_tree_of_that_max_depth (2**maxdepth) (actual leaves usually less when branching of mostly in one direction).
     """
     properties = ['max_depth','node_count','n_leaves']
-    #derived_property = ['flatness']
-    derived_property = []
-    counts = np.zeros((forest.n_estimators, len(properties + derived_property)), dtype = np.int64)
+    counts = np.zeros((forest.n_estimators, len(properties)), dtype = np.int64)
     for i, tree in enumerate(forest.estimators_):
         counts[i,:len(properties)] = [getattr(tree.tree_, name) for name in properties]
     
-    # Derive the other
-    #counts[:,-1] = counts[:,properties.index('n_leaves')] / 2**counts[:,properties.index('max_depth')]
-
     if not average:
-        return pd.DataFrame(counts, index = pd.RangeIndex(forest.n_estimators, name = 'tree'), columns = properties + derived_property)
+        return pd.DataFrame(counts, index = pd.RangeIndex(forest.n_estimators, name = 'tree'), columns = properties)
     else:
-        return pd.Series(counts.mean(axis = 0), index = pd.Index(properties + derived_property, name = 'properties'))
+        return pd.Series(counts.mean(axis = 0), index = pd.Index(properties, name = 'properties'))
 
 def compute_forest_shaps(model: Callable, X_in, y_in, X_val = None, y_val = None, on_validation = True, bg_from_training = True, sample = 'standard', n_folds = 10, split_on_year = True, explainer_kwargs = dict()) -> pd.DataFrame:
     """
     Computation of (non-interaction) SHAP values through shap.TreeExplainer. Outputs a frame of shap values with same dimensions as X
-    A non-fitted forest (classifier or regressor), options to get the background data from the training or the validation
+    A non-fitted forest (classifier or regressor), potentially inside a hybrid model, options to get the background data from the training or the validation
     the sampling of the background can for instance be without balancing, but also in the case of classification
     with only positives or negatives
     other explainer kwargs are for instance a possible link function, or model_output
     Cross-validation if X_val and y_val are not supplied
     """
     assert sample in ['standard','negative','positive']
-    max_samples = 500
+    max_samples = 5 #500
     logging.debug(f'TreeShap will be started for {"validation" if on_validation else "training"}, with background data from {"validation" if not bg_from_training else "training"}, event sampling is {sample}')
     # Use similar setup as fit_predict_evaluate, with an inner_func that is potentially called multiple times
     def inner_func(model, X_train, y_train, X_val: pd.DataFrame, y_val: pd.Series) -> pd.DataFrame:

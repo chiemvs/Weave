@@ -52,8 +52,8 @@ def execute_shap(respseptup):
     if not retpath.exists():
         X,y = read_data(responseagg = responseagg, separation = separation, quantile = 0.8)
 
-        m = RandomForestClassifier(max_depth = 7, n_estimators = 1500, min_samples_split = 40, max_features = 35, n_jobs = njobs_per_imp)
-        shappies = compute_forest_shaps(m, X, y, on_validation = False, bg_from_training = True, sample = 'standard', n_folds = 5)
+        model = HybridExceedenceModel(max_depth = 5, n_estimators = 2500, min_samples_split = 30, max_features = 35, n_jobs = njobs_per_imp)
+        shappies = compute_forest_shaps(model, X, y, on_validation = False, bg_from_training = True, sample = 'standard', n_folds = 5)
         retpath.mkdir(parents = True)
         pq.write_table(pa.Table.from_pandas(shappies), retpath / 'responsagg_separation.parquet')
         logging.debug(f'subprocess has written out SHAP frame at {retpath}')
