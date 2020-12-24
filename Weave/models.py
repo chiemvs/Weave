@@ -371,17 +371,18 @@ def get_forest_properties(forest: Union[RandomForestRegressor,RandomForestClassi
     else:
         return pd.Series(counts.mean(axis = 0), index = pd.Index(properties, name = 'properties'))
 
-def compute_forest_shaps(model: Callable, X_in, y_in, X_val = None, y_val = None, on_validation = True, bg_from_training = True, sample = 'standard', n_folds = 10, split_on_year = True, explainer_kwargs = dict()) -> pd.DataFrame:
+def compute_forest_shaps(model: Callable, X_in, y_in, X_val = None, y_val = None, on_validation = True, bg_from_training = True, sample = 'standard', n_folds = 10, split_on_year = True, explainer_kwargs = dict(), shap_kwargs = dict(check_additivity = True)) -> pd.DataFrame:
     """
     Computation of (non-interaction) SHAP values through shap.TreeExplainer. Outputs a frame of shap values with same dimensions as X
     A non-fitted forest (classifier or regressor), potentially inside a hybrid model, options to get the background data from the training or the validation
     the sampling of the background can for instance be without balancing, but also in the case of classification
     with only positives or negatives
     other explainer kwargs are for instance a possible link function, or model_output
+    shap kwargs are for instance check_additivity
     Cross-validation if X_val and y_val are not supplied
     """
     assert sample in ['standard','negative','positive']
-    max_samples = 5 #500
+    max_samples = 500
     logging.debug(f'TreeShap will be started for {"validation" if on_validation else "training"}, with background data from {"validation" if not bg_from_training else "training"}, event sampling is {sample}')
     # Use similar setup as fit_predict_evaluate, with an inner_func that is potentially called multiple times
     def inner_func(model, X_train, y_train, X_val: pd.DataFrame, y_val: pd.Series) -> pd.DataFrame:
@@ -405,7 +406,7 @@ def compute_forest_shaps(model: Callable, X_in, y_in, X_val = None, y_val = None
         else:
             explainer = shap.TreeExplainer(model = model, data = background, feature_perturbation = 'interventional', **explainer_kwargs)
 
-        shap_values = explainer.shap_values(X_val if on_validation else X_train) # slow. Outputs a numpy ndarray or a list of them when classifying. We need to add columns and indices
+        shap_values = explainer.shap_values(X_val if on_validation else X_train, **shap_kwargs) # slow. Outputs a numpy ndarray or a list of them when classifying. We need to add columns and indices
         if isinstance(model, RandomForestClassifier):
             shap_values = shap_values[model.classes_.tolist().index(True)] # Only the probabilities for the positive case
             explainer.expected_value = explainer.expected_value[model.classes_.tolist().index(True)] # Base probability / frequency (potentially through a link function) according to the background data. This plus the average shap sum should add up to the climatological probability
