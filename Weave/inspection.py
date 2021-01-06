@@ -14,6 +14,11 @@ import matplotlib.pyplot as plt
 from pathlib import Path
 from typing import Union, List, Tuple
 
+try:
+    import shap
+except ImportError:
+    pass
+
 from .processing import TimeAggregator
 from .models import map_foldindex_to_groupedorder, get_validation_fold_time, crossvalidate
 from .utils import collapse_restore_multiindex
@@ -114,6 +119,7 @@ class ImportanceData(object):
             # Prepare the expected values and load the X data
             self.expvals = pd.concat(expected_values, keys = keys, axis = 0) # concatenation as columns, not present because they were series
             self.expvals.index.names = ['respagg','separation'] + self.expvals.index.names[2:] 
+            self.expvals.index = self.expvals.index.reorder_levels(['respagg'] + self.expvals.index.names[2:] + ['separation']) # Make sure that separation comes last, to match the possible removel of the first separation level when double
         if y_too:
             y_path = list(inputpath.glob('response.multiagg.detrended.parquet'))[0]
             self.y = pd.read_parquet(y_path).T # summer only 
@@ -545,3 +551,26 @@ def scatterplot(impdata: ImportanceData, selection: pd.DataFrame, alpha = 0.5, q
     ax.set_ylabel(f'response agg: {y_summer.index[0]}')
 
     return fig, axes
+
+def data_for_shapplot(impdata: ImportanceData, selection: pd.DataFrame, fit_base: bool = False) -> dict:
+    """
+    Function to prepare data for shap.force_plot and shap.summary_plot
+    that selects X-vals accompanying the selection
+    Collapses the column names (otherwise not accepted)
+    Does a transpose for the numpy arrays to feed to the functions
+    """
+    X_vals = impdata.get_matching_X(selection)
+
+    if not fit_base:
+        base_value = np.unique(impdata.get_matching(impdata.expvals, selection))
+        assert len(base_value) == 1, 'the base_value should be unique, your selection potentially contains multiple folds'
+        returndict = dict(base_value = float(base_value))
+    else:
+        warnings.warn('Fitting of base value not yet implemented. Needs transformed y data')
+        returndict = dict()
+
+    selection, names, dtypes = collapse_restore_multiindex(selection, axis = 0, ignore_level = ['lag'], inplace = False)
+    returndict.update(dict(shap_values = selection.values.T, features = X_vals.values.T, feature_names = selection.index))
+
+    return returndict 
+
