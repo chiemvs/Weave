@@ -20,7 +20,7 @@ except ImportError:
     pass
 
 from .processing import TimeAggregator
-from .models import map_foldindex_to_groupedorder, get_validation_fold_time, crossvalidate
+from .models import map_foldindex_to_groupedorder, get_validation_fold_time, crossvalidate, HybridExceedenceModel, fit_predict
 from .utils import collapse_restore_multiindex
 
 def scale_high_to_high(series: pd.Series, fill_na: bool = False):
@@ -45,7 +45,12 @@ def scale_high_to_low(series: pd.Series, fill_na: bool = False):
 
 class ImportanceData(object):
 
-    def __init__(self, basepath: Path, respagg: Union[int, list], separation:Union[int, list]) -> None:
+    def __init__(self, basepath: Path, respagg: Union[int, list], separation:Union[int, list], quantile: float = None, model = None) -> None:
+        """
+        Reading from a directory with importance dataframes. Which ones is determined by the respagg separation combinations
+        Also possible to supply the threshold for which things were computed.
+        Plus the initialized model type used (optional, but useful for the base rate of 
+        """
         self.integer_indices = ['respagg','lag','separation','fold','clustid','timeagg']
         self.basepath = basepath
         try:
@@ -57,11 +62,22 @@ class ImportanceData(object):
         except TypeError:
             self.separation = (separation,)
 
+        self.quantile = quantile
+        self.model = model
+        if not self.model is None:
+            assert not isinstance(self.model, type), 'When supplying a model it needs to be initialized already'
+
+        if isinstance(self.model, HybridExceedenceModel):
+            logging.debug('ImportanceData registered that data comes from hybrid model. Assuming that trended y is applicable')
+            self.yname = 'response.multiagg.trended.parquet' 
+        else:
+            self.yname = 'response.multiagg.detrended.parquet' 
+
     def load_data(self, X_too = False, y_too = False, inputpath: Path = None):
         """
         will automatically load the X values if shap 
         Path discovery according: basepath/respagg/separation/*.parquet
-        Path discovery for X and y is inputpath / precursor.multiagg.parquet and inputpath / response.multiagg.trended.parquet
+        Path discovery for X and y is inputpath / precursor.multiagg.parquet and inputpath / response.multiagg.(de)trended.parquet
         If you wish a custom y either supply .y attribute directly or operate on it
         conversion of index datatypes (string to integer) but not needed for newest way of storing
         """
@@ -121,7 +137,7 @@ class ImportanceData(object):
             self.expvals.index.names = ['respagg','separation'] + self.expvals.index.names[2:] 
             self.expvals.index = self.expvals.index.reorder_levels(['respagg'] + self.expvals.index.names[2:] + ['separation']) # Make sure that separation comes last, to match the possible removel of the first separation level when double
         if y_too:
-            y_path = list(inputpath.glob('response.multiagg.detrended.parquet'))[0]
+            y_path = list(inputpath.glob(self.yname))[0]
             self.y = pd.read_parquet(y_path).T # summer only 
             # We drop the variable (t2m-anom) and clustid labels, as these are meaningless for the matching to importances. And we need to change timeagg to respagg 
             self.y.index = pd.Index(self.y.index.get_level_values('timeagg'), name = 'respagg') 
@@ -195,6 +211,44 @@ class ImportanceData(object):
         self.df = self.df.abs().mean(axis = 1) # Reduces it into a series.
         self.df.name = 'avgabsshap' 
         self.df = self.df.to_frame()
+
+    def get_baserate(self, when: pd.Index) -> Union[float,pd.Series,pd.DataFrame]:
+        """
+        For the case of binary classification the base probability can be asked
+        if when has length one a float is returned, otherwise a series with the same index
+        The baserate is useful for e.g. shap plots to visualize probabilistic deviation from the base expectation
+        This base model (strength of climatic trend) depends on the respagg (and quantile, but quantile is given at initialization)
+        but of respagg we can have multiple so therefore potentially a pd.DataFrame is returned
+        """
+        assert isinstance(when, pd.core.indexes.datetimes.DatetimeIndex), 'Datetimeindex needed, Multiindex with a fold level is taken care of when fitting'
+        if not isinstance(self.model,HybridExceedenceModel): # In this case the y data is not trended
+            if len(when) == 1:
+                return self.quantile
+            else:
+                return pd.Series(data = np.full(shape = (len(when),), fill_value = self.quantile), index = when, name = 'baserate')
+        else:
+            # Should it be connected to the varying folds? In a sense yes... that is what the model saw 
+            # Not separation dependent
+            tempX = self.X.T # Temporary to row-indexed time
+            returns = []
+            for respagg in self.respagg:
+                tempy = self.y.loc[respagg,:].T # Temporary to row indexed time
+                tempy = tempy > tempy.quantile(self.quantile)
+                returns.append(fit_predict(self.model.base, X_in = tempX, y_in = tempy, n_folds = 5))
+            full = pd.concat(returns, axis = 1, keys = pd.Index(self.respagg, name = 'respagg')) # Full now has a multiindex as row, respagg ints in the column
+            full.index = full.index.droplevel('fold')
+            return full.loc[when,:]
+
+    def get_exceedences(self, when: pd.Index):
+        """
+        To get the y in terms of the binary exceedences. Trended or not, 
+        which depends on the loaded y path and the model supplied upon initialization
+        """
+        assert isinstance(when, pd.core.indexes.datetimes.DatetimeIndex), 'Datetimeindex needed, Multiindex with a fold level is taken care of when fitting'
+        thresholds = self.y.quantile(axis = 1) # over axis 1 means over the whole timeseries
+        binaries = pd.DataFrame(self.y.values > thresholds.values[:,np.newaxis], index = thresholds.index, columns = self.y.columns)
+        return binaries.loc[self.respagg, when].T
+         
 
 class FacetMapResult(object):
     """

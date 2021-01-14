@@ -69,6 +69,15 @@ class BaseExceedenceModel(LogisticRegression):
         one_class_preds = two_class_preds[:,self.classes_.tolist().index(True)]
         return one_class_preds
 
+    def predict_log_proba(self, X) -> np.ndarray:
+        """
+        Modification to return only the log(prob) of the positive class
+        Not indexed
+        """
+        two_class_preds = LogisticRegression.predict_log_proba(self = self, X = self.transform_input(X, force = False))
+        one_class_preds = two_class_preds[:,self.classes_.tolist().index(True)]
+        return one_class_preds
+
 class HybridExceedenceModel(object):
     """
     Binary trended response variable (two classes)
