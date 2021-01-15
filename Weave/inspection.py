@@ -227,14 +227,15 @@ class ImportanceData(object):
             else:
                 return pd.Series(data = np.full(shape = (len(when),), fill_value = self.quantile), index = when, name = 'baserate')
         else:
-            # Should it be connected to the varying folds? In a sense yes... that is what the model saw 
+            assert self.model.base_only, 'model needs to be initialized with baseonly to return the baserates, in a way that is compatible with non-cv base model fitting'
+            # Should it be connected to the varying folds? In a sense yes... that is what the model saw. 
             # Not separation dependent
             tempX = self.X.T # Temporary to row-indexed time
             returns = []
             for respagg in self.respagg:
                 tempy = self.y.loc[respagg,:].T # Temporary to row indexed time
                 tempy = tempy > tempy.quantile(self.quantile)
-                returns.append(fit_predict(self.model.base, X_in = tempX, y_in = tempy, n_folds = 5))
+                returns.append(fit_predict(self.model, X_in = tempX, y_in = tempy, n_folds = 5))
             full = pd.concat(returns, axis = 1, keys = pd.Index(self.respagg, name = 'respagg')) # Full now has a multiindex as row, respagg ints in the column
             full.index = full.index.droplevel('fold')
             return full.loc[when,:]

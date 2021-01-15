@@ -87,25 +87,38 @@ class HybridExceedenceModel(object):
     Then the response is tranformed by subtracting the base rate 
     The residual 'probabilistic anomaly' is then treated as a regression problem.
     """
-    def __init__(self, *rfargs, **rfkwargs):
+    def __init__(self, fit_base_to_all_cv: bool = False, base_only: bool = False, *rfargs, **rfkwargs):
         """
         The supplied args and kwargs need to be for the RandomForestRegressor, e.g. hyperparams
+        Flag possible to ask for greedy use of both train and val data for training the base trend model
+        within a cross-validation setting, where these things are automated
+        possible to fit and predict only the base part. Can speed up if only that is desired, but keeping the same model
         """
         self.base = BaseExceedenceModel()
         self.rf = RandomForestRegressor(*rfargs, **rfkwargs)
+        self.greedyfit = fit_base_to_all_cv # Also needed to recognize greedy need at base for algortihms seeing only the hybrid top 
+        self.base.greedyfit = fit_base_to_all_cv
+        self.base_only = base_only
 
     def __repr__(self):
-        return f'Hybrid combination with {self.rf} on top of {self.base}'
+        return f'Hybrid combination with {self.rf} on top of {self.base}, with greedy base: {self.base.greedyfit}'
 
-    def fit(self, X, y):
+    def fit(self, X, y, fullX = None, fully = None):
         """
         Fit & predict base rate trend of True in training response data
         Create new probalistic anomalie response with possible scale: [-1, 1]
+        Full X and full y can be supplied when greedy fit is true (channeled only to base fit func)
         """
-        self.base.fit(X = X, y = y)
-        baserate = self.base.predict(X = X) # Uses only the time axis of X, predicting the training data
-        probabilistic_anoms = y - baserate # Bool minus numeric 
-        self.rf.fit(X = X, y = probabilistic_anoms)
+        if self.base.greedyfit:
+            assert (not fullX is None) and (not fully is None), 'fullX and fully need to be supplied by the crossvalidation if you want the fit_base_to_all option'
+            self.base.fit(X = fullX, y = fully)
+        else:
+            self.base.fit(X = X, y = y)
+        if not self.base_only:
+            baserate = self.base.predict(X = X) # Uses only the time axis of X, predicting the training data
+            probabilistic_anoms = y - baserate # Bool minus numeric 
+            #logloss = -np.log(baserate) * y - np.log(1 - baserate)  * (~y)
+            self.rf.fit(X = X, y = probabilistic_anoms)
 
     def predict(self, X) -> np.ndarray:
         """
@@ -114,11 +127,14 @@ class HybridExceedenceModel(object):
         Predictions need be clipped to [0, 1]
         """
         baserate = self.base.predict(X) # Predicting with fitted baserate model 
-        probabilistic_anoms = self.rf.predict(X = X)  # [-1 to 1]
-        predictions = baserate + probabilistic_anoms # stays a numpy ndarray, necessary for comparibility with permutation importance. 
-        predictions[predictions < 0] = 0
-        predictions[predictions > 1] = 1
-        return predictions 
+        if self.base_only:
+            return baserate
+        else:
+            probabilistic_anoms = self.rf.predict(X = X)  # [-1 to 1]
+            predictions = baserate + probabilistic_anoms # stays a numpy ndarray, necessary for comparibility with permutation importance. 
+            #predictions[predictions < 0] = 0
+            #predictions[predictions > 1] = 1
+            return predictions 
 
 def evaluate(data = None, y_true = None, y_pred = None, scores = [r2_score, mean_squared_error, mean_absolute_error], score_names = ['r2','mse','mae']) -> pd.Series:
     """
@@ -250,7 +266,13 @@ def fit_predict_evaluate(model: Callable, X_in, y_in, X_val = None, y_val = None
     def inner_func(model, X_train, y_train, X_val, y_val) -> pd.Series:
         if not balance_training is None:
             X_train, y_train = balance_training_data(how = balance_training, X_train = X_train, y_train = y_train)
-        model.fit(X = X_train, y=y_train)
+        try:
+            if model.greedyfit:
+                model.fit(X = X_train, y=y_train, fullX = pd.concat([X_train,X_val], axis = 0), fully = pd.concat([y_train, y_val], axis = 0)) # Order of the concatenation does not matter.
+            else:
+                raise AttributeError('greedyfit attribute is False, act as if not found')
+        except AttributeError:
+            model.fit(X = X_train, y=y_train)
         preds = model.predfunc(X = X_val)
         scores = evaluate(y_true = y_val, y_pred = preds, **evaluate_kwds) # Unseen data
         if compare_val_train:
@@ -287,7 +309,13 @@ def fit_predict(model: Callable, X_in, y_in, X_val = None, y_val = None, n_folds
     def inner_func(model, X_train, y_train, X_val, y_val) -> pd.Series:
         if not balance_training is None:
             X_train, y_train = balance_training_data(how = balance_training, X_train = X_train, y_train = y_train)
-        model.fit(X = X_train, y=y_train)
+        try:
+            if model.greedyfit:
+                model.fit(X = X_train, y=y_train, fullX = pd.concat([X_train,X_val], axis = 0), fully = pd.concat([y_train, y_val], axis = 0)) # Order of the concatenation does not matter.
+            else:
+                raise AttributeError('greedyfit attribute is False, act as if not found')
+        except AttributeError:
+            model.fit(X = X_train, y=y_train)
         preds = model.predfunc(X = X_val)
         return pd.Series(preds, index = y_val.index)
 
