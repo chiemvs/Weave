@@ -212,13 +212,13 @@ class ImportanceData(object):
         self.df.name = 'avgabsshap' 
         self.df = self.df.to_frame()
 
-    def get_baserate(self, when: pd.Index) -> Union[float,pd.Series,pd.DataFrame]:
+    def get_baserate(self, when: pd.Index, respagg: int = None, n_folds: int = 5) -> Union[float,pd.Series,pd.DataFrame]:
         """
         For the case of binary classification the base probability can be asked
         if when has length one a float is returned, otherwise a series with the same index
         The baserate is useful for e.g. shap plots to visualize probabilistic deviation from the base expectation
         This base model (strength of climatic trend) depends on the respagg (and quantile, but quantile is given at initialization)
-        but of respagg we can have multiple so therefore potentially a pd.DataFrame is returned
+        but of respagg we can have multiple so therefore a pd.DataFrame is returned
         """
         assert isinstance(when, pd.core.indexes.datetimes.DatetimeIndex), 'Datetimeindex needed, Multiindex with a fold level is taken care of when fitting'
         if not isinstance(self.model,HybridExceedenceModel): # In this case the y data is not trended
@@ -227,20 +227,21 @@ class ImportanceData(object):
             else:
                 return pd.Series(data = np.full(shape = (len(when),), fill_value = self.quantile), index = when, name = 'baserate')
         else:
-            assert self.model.base_only, 'model needs to be initialized with baseonly to return the baserates, in a way that is compatible with non-cv base model fitting'
+            if not self.model.base_only:
+                self.model.base_only = True
+                warnings.warn(f'model {self.model} set baseonly to return the baserates, in a way that is compatible with non-cv base model fitting')
             # Should it be connected to the varying folds? In a sense yes... that is what the model saw. 
             # Not separation dependent
-            tempX = self.X.T # Temporary to row-indexed time
+            tempX = self.X.T # Temporary to row-indexed time. X values themselves do not matter. Only the index is used for the base rate model
+            tempy = self.get_exceedences(when =  tempX.index) # Temporary y with row indexed time, full index for fitting
             returns = []
-            for respagg in self.respagg:
-                tempy = self.y.loc[respagg,:].T # Temporary to row indexed time
-                tempy = tempy > tempy.quantile(self.quantile)
-                returns.append(fit_predict(self.model, X_in = tempX, y_in = tempy, n_folds = 5))
+            for respagg_iterator in self.respagg:
+                returns.append(fit_predict(self.model, X_in = tempX, y_in = tempy.loc[:,respagg_iterator], n_folds = n_folds))
             full = pd.concat(returns, axis = 1, keys = pd.Index(self.respagg, name = 'respagg')) # Full now has a multiindex as row, respagg ints in the column
             full.index = full.index.droplevel('fold')
-            return full.loc[when,:]
+            return full.loc[when,self.respagg if respagg is None else [respagg]]
 
-    def get_exceedences(self, when: pd.Index):
+    def get_exceedences(self, when: pd.Index, respagg: int = None) -> pd.DataFrame:
         """
         To get the y in terms of the binary exceedences. Trended or not, 
         which depends on the loaded y path and the model supplied upon initialization
@@ -248,8 +249,27 @@ class ImportanceData(object):
         assert isinstance(when, pd.core.indexes.datetimes.DatetimeIndex), 'Datetimeindex needed, Multiindex with a fold level is taken care of when fitting'
         thresholds = self.y.quantile(axis = 1) # over axis 1 means over the whole timeseries
         binaries = pd.DataFrame(self.y.values > thresholds.values[:,np.newaxis], index = thresholds.index, columns = self.y.columns)
-        return binaries.loc[self.respagg, when].T
-         
+        return binaries.loc[self.respagg if respagg is None else [respagg], when].T
+
+    def fit_model(self, respagg: int, separation: int, n_folds: int = 5) -> pd.Series:
+        """
+        Fits the supplied model for one forecasting situation (defined by respagg and separation)
+        with x and y that are attached to this object
+        """
+        if self.model.base_only:
+            self.model.base_only = False
+            warnings.warn(f'model {self.model} set False baseonly')
+        tempX = self.get_matching_X(self.df.loc[np.logical_and(self.df.index.get_loc_level(respagg, 'respagg')[0],self.df.index.get_loc_level(separation,'separation')[0]),:]).T
+        tempy = self.get_exceedences(when =  tempX.index, respagg = respagg) # Temporary y with row indexed time, full index for fitting
+        preds = fit_predict(self.model, X_in = tempX, y_in = tempy, n_folds = n_folds)
+        preds.index = preds.index.droplevel('fold')
+        return preds
+    
+    def get_predictions(self, when: pd.Index):
+        """
+        Gets the predictions of the model for a certain timeslice
+        """
+        pass
 
 class FacetMapResult(object):
     """
@@ -613,16 +633,20 @@ def data_for_shapplot(impdata: ImportanceData, selection: pd.DataFrame, fit_base
     that selects X-vals accompanying the selection
     Collapses the column names (otherwise not accepted)
     Does a transpose for the numpy arrays to feed to the functions
+    shap plot cannot handle an array of base values (e.g. coming from the hybrid method) so checks for that
     """
+    assert isinstance(selection, pd.DataFrame), 'Need columns for this, if only a single timeslice e.g. select with .iloc[:,[100]]'
+    respagg = selection.index.get_level_values('respagg').unique()
+    assert len(respagg) == 1, 'A shap plot should contain only the contributions for one response time aggregation' 
     X_vals = impdata.get_matching_X(selection)
 
     if not fit_base:
         base_value = np.unique(impdata.get_matching(impdata.expvals, selection))
-        assert len(base_value) == 1, 'the base_value should be unique, your selection potentially contains multiple folds'
-        returndict = dict(base_value = float(base_value))
     else:
-        warnings.warn('Fitting of base value not yet implemented. Needs transformed y data')
-        returndict = dict()
+        base_value = np.unique(impdata.get_baserate(when = selection.columns, respagg = respagg))
+
+    assert len(base_value) == 1, f'the base_value should be unique, your selection potentially contains multiple folds, or if fit_base={fit_base} the base rate of the hybrid model could change with time'
+    returndict = dict(base_value = float(base_value))
 
     selection, names, dtypes = collapse_restore_multiindex(selection, axis = 0, ignore_level = ['lag'], inplace = False)
     returndict.update(dict(shap_values = selection.values.T, features = X_vals.values.T, feature_names = selection.index))
