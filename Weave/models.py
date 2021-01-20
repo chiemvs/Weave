@@ -87,7 +87,7 @@ class HybridExceedenceModel(object):
     Then the response is tranformed by subtracting the base rate 
     The residual 'probabilistic anomaly' is then treated as a regression problem.
     """
-    def __init__(self, fit_base_to_all_cv: bool = False, base_only: bool = False, *rfargs, **rfkwargs):
+    def __init__(self, fit_base_to_all_cv: bool = False, base_only: bool = False, cap_predictions: bool = True, *rfargs, **rfkwargs):
         """
         The supplied args and kwargs need to be for the RandomForestRegressor, e.g. hyperparams
         Flag possible to ask for greedy use of both train and val data for training the base trend model
@@ -99,6 +99,7 @@ class HybridExceedenceModel(object):
         self.greedyfit = fit_base_to_all_cv # Also needed to recognize greedy need at base for algortihms seeing only the hybrid top 
         self.base.greedyfit = fit_base_to_all_cv
         self.base_only = base_only
+        self.cap = cap_predictions
 
     def __repr__(self):
         return f'Hybrid combination with {self.rf} on top of {self.base}, with greedy base: {self.base.greedyfit}'
@@ -132,8 +133,9 @@ class HybridExceedenceModel(object):
         else:
             probabilistic_anoms = self.rf.predict(X = X)  # [-1 to 1]
             predictions = baserate + probabilistic_anoms # stays a numpy ndarray, necessary for comparibility with permutation importance. 
-            #predictions[predictions < 0] = 0
-            #predictions[predictions > 1] = 1
+            if self.cap:
+                predictions[predictions < 0] = 0
+                predictions[predictions > 1] = 1
             return predictions 
 
 def evaluate(data = None, y_true = None, y_pred = None, scores = [r2_score, mean_squared_error, mean_absolute_error], score_names = ['r2','mse','mae']) -> pd.Series:
@@ -369,7 +371,13 @@ def permute_importance(model: Callable, X_in, y_in, X_val = None, y_val = None, 
 
     # Use similar setup as fit_predict_evaluate, with an inner_func that is potentially called multiple times
     def inner_func(model, X_train, y_train, X_val: pd.DataFrame, y_val: pd.Series) -> pd.DataFrame:
-        model.fit(X = X_train, y = y_train)
+        try:
+            if model.greedyfit:
+                model.fit(X = X_train, y=y_train, fullX = pd.concat([X_train,X_val], axis = 0), fully = pd.concat([y_train, y_val], axis = 0)) # Order of the concatenation does not matter.
+            else:
+                raise AttributeError('greedyfit attribute is False, act as if not found')
+        except AttributeError:
+            model.fit(X = X_train, y=y_train)
         y_val = y_val.to_frame() # Required form for perm imp
         _, names, dtypes = collapse_restore_multiindex(X_val, axis = 1, inplace = True) # Collapse of the index is required unfortunately for the column names
         #result = sklearn_permutation_importance(model = model, scoring_data = (X_val.values, y_val.values), evaluation_fn = evaluation_fn, scoring_strategy = scoring_strategy, variable_names = X_val.columns, **perm_imp_kwargs) # Pass the data as numpy arrays. Avoid bug in PermutationImportance, see scripts/minimum_example.py https://github.com/gelijergensen/PermutationImportance/issues/84
@@ -426,7 +434,13 @@ def compute_forest_shaps(model: Callable, X_in, y_in, X_val = None, y_val = None
         """
         Will return a dataframe with the dimensions of X_train or X_val (depending on 'on_validation' argument
         """
-        model.fit(X = X_train, y = y_train)
+        try:
+            if model.greedyfit:
+                model.fit(X = X_train, y=y_train, fullX = pd.concat([X_train,X_val], axis = 0), fully = pd.concat([y_train, y_val], axis = 0)) # Order of the concatenation does not matter.
+            else:
+                raise AttributeError('greedyfit attribute is False, act as if not found')
+        except AttributeError:
+            model.fit(X = X_train, y=y_train)
         if bg_from_training:
             X_bg_set, y_bg_set = X_train, y_train
         else:

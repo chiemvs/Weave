@@ -38,11 +38,13 @@ def read_prepare_data(responseagg = 3, separation = -7, quantile: float = 0.9):
 
 def get_classif_bs(X, y, hyperparams: dict, blocksizes: list = [None]):
     #r2 = RandomForestClassifier(**hyperparams) 
+    #outcomes = fit_predict(r2, X_in = X, y_in = y, n_folds = 5)
     base = BaseExceedenceModel()
     hybrid = HybridExceedenceModel(**hyperparams)
-    #outcomes_base = fit_predict(base, X_in = X, y_in = y, n_folds = 5)
+    #outcomes_base = fit_predict(base, X_in = X, y_in = y, n_folds = 5) # Less strict base model
     outcomes_base = fit_predict(base, X_in = X, y_in = y, X_val = X, y_val = y) # Most strict non-cv basemodel
     outcomes_hybrid = fit_predict(hybrid, X_in = X, y_in = y, n_folds = 5) 
+    #outcomes = fit_predict(hybrid, X_in = X, y_in = y, n_folds = 5) 
     """
     procedure to drop the fourth fold
     """
@@ -73,7 +75,7 @@ def get_classif_bs(X, y, hyperparams: dict, blocksizes: list = [None]):
     return pd.DataFrame(scores, index = pd.Index(blocksizes, name = 'blocksize'), columns = pd.Index(bootstrap_quantiles, name = 'bss_quantile'))
 
 
-params = dict(max_depth = 5, n_estimators = 2500, min_samples_split = 30, max_features = 35, n_jobs = NPROC)
+params = dict(fit_base_to_all_cv = True, max_depth = 5, n_estimators = 2500, min_samples_split = 30, max_features = 35, n_jobs = NPROC)
 
 # First without any bootstrap types (more auto-correlated, more skillful with increasing timeagg)
 fullset = read_prepare_data(slice(None),slice(None))
@@ -87,6 +89,7 @@ for separation in separations:
     for timeagg in timeaggs: 
         for quantile in [0.5,0.666,0.8,0.9]:
             test = get_classif_bs(*read_prepare_data(timeagg,separation,quantile), hyperparams = params, blocksizes = [None,5,15,30,60])
+            #test['clim'] = brier_score_clim(quantile) # Commented out when hybrid/skillscore
             outcomes.append(test)
             keys.append((timeagg,separation,quantile))
 
