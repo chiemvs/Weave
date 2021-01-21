@@ -212,7 +212,7 @@ class ImportanceData(object):
         self.df.name = 'avgabsshap' 
         self.df = self.df.to_frame()
 
-    def get_baserate(self, when: pd.Index, respagg: int = None, n_folds: int = 5) -> Union[float,pd.Series,pd.DataFrame]:
+    def get_baserate(self, when: pd.Index, respagg: Union[pd.Index,int] = None, n_folds: int = 5) -> Union[float,pd.Series,pd.DataFrame]:
         """
         For the case of binary classification the base probability can be asked
         if when has length one a float is returned, otherwise a series with the same index
@@ -239,17 +239,23 @@ class ImportanceData(object):
                 returns.append(fit_predict(self.model, X_in = tempX, y_in = tempy.loc[:,respagg_iterator], n_folds = n_folds))
             full = pd.concat(returns, axis = 1, keys = pd.Index(self.respagg, name = 'respagg')) # Full now has a multiindex as row, respagg ints in the column
             full.index = full.index.droplevel('fold')
-            return full.loc[when,self.respagg if respagg is None else [respagg]]
+            if respagg is None:
+                return full.loc[when,self.respagg]
+            elif isinstance(respagg, int):
+                return full.loc[when,[respagg]] # List(respagg) is here to make sure we are returning a DataFrame
+            else:
+                return full.loc[when,respagg]
 
-    def get_exceedences(self, when: pd.Index, respagg: int = None) -> pd.DataFrame:
+    def get_exceedences(self, when: pd.Index, respagg: int = None) -> Union[pd.Series,pd.DataFrame]:
         """
         To get the y in terms of the binary exceedences. Trended or not, 
         which depends on the loaded y path and the model supplied upon initialization
+        Series if a single respagg is requested, otherwise pd.DataFrame
         """
         assert isinstance(when, pd.core.indexes.datetimes.DatetimeIndex), 'Datetimeindex needed, Multiindex with a fold level is taken care of when fitting'
         thresholds = self.y.quantile(axis = 1) # over axis 1 means over the whole timeseries
         binaries = pd.DataFrame(self.y.values > thresholds.values[:,np.newaxis], index = thresholds.index, columns = self.y.columns)
-        return binaries.loc[self.respagg if respagg is None else [respagg], when].T
+        return binaries.loc[self.respagg if respagg is None else respagg, when].T
 
     def fit_model(self, respagg: int, separation: int, n_folds: int = 5) -> pd.Series:
         """
@@ -260,16 +266,24 @@ class ImportanceData(object):
             self.model.base_only = False
             warnings.warn(f'model {self.model} set False baseonly')
         tempX = self.get_matching_X(self.df.loc[np.logical_and(self.df.index.get_loc_level(respagg, 'respagg')[0],self.df.index.get_loc_level(separation,'separation')[0]),:]).T
-        tempy = self.get_exceedences(when =  tempX.index, respagg = respagg) # Temporary y with row indexed time, full index for fitting
+        tempy = self.get_exceedences(when =  tempX.index, respagg = respagg).T # Temporary y with row indexed time, full index for fitting
         preds = fit_predict(self.model, X_in = tempX, y_in = tempy, n_folds = n_folds)
         preds.index = preds.index.droplevel('fold')
         return preds
     
-    def get_predictions(self, when: pd.Index):
+    def get_predictions(self, when: pd.Index, respagg: int, separation: int):
         """
         Gets the predictions of the model for a certain timeslice
+        Caches them for future use
         """
-        pass
+        if not hasattr(self, 'predictions'):
+            self.predictions = pd.DataFrame(index = pd.MultiIndex.from_product([self.respagg,self.separation], names = ['respagg','separation']) ,columns = self.y.columns, dtype = 'float64') # Initialize empty
+
+        if self.predictions.loc[(respagg,separation)].isnull().all():
+            self.predictions.loc[(respagg,separation)] = self.fit_model(respagg = respagg, separation = separation) 
+
+        return self.predictions.loc[(respagg,separation),when].T
+
 
 class FacetMapResult(object):
     """
@@ -636,7 +650,7 @@ def data_for_shapplot(impdata: ImportanceData, selection: pd.DataFrame, fit_base
     shap plot cannot handle an array of base values (e.g. coming from the hybrid method) so checks for that
     """
     assert isinstance(selection, pd.DataFrame), 'Need columns for this, if only a single timeslice e.g. select with .iloc[:,[100]]'
-    respagg = selection.index.get_level_values('respagg').unique()
+    respagg = selection.index.get_level_values('respagg').unique() # Potentially passing a pd.Index to get_baserate
     assert len(respagg) == 1, 'A shap plot should contain only the contributions for one response time aggregation' 
     X_vals = impdata.get_matching_X(selection)
 
@@ -652,4 +666,34 @@ def data_for_shapplot(impdata: ImportanceData, selection: pd.DataFrame, fit_base
     returndict.update(dict(shap_values = selection.values.T, features = X_vals.values.T, feature_names = selection.index))
 
     return returndict 
+
+def yplot(impdata: ImportanceData, resp_sep_combinations: List[Tuple[int]] = [(31,-15)], when: pd.Index = None, startdate: pd.Timestamp = None, enddate: pd.Timestamp = None):
+    """
+    Calls upon the importance data object to fit the desired models and get the desired exceedences
+    Then fabricates a plot where each line forms the predicted probability.
+    On top of that line dots denote a True binary resulting observation
+    Possibility to do this for a custom time range, supplied by when, or from startdate and endate
+    """
+    if not when is None:
+        customrange = when
+    elif not ((startdate is None) or (enddate is None)):
+        customrange = pd.date_range(startdate, enddate, freq = 'D', name = 'time')
+    else:
+        customrange = ImportanceData.y.columns # Just take range from the object
+
+    customrange = customrange[customrange.map(lambda stamp: stamp.month in [6,7,8])] # Assert summer only
+    
+    fig, ax = plt.subplots()
+    for respagg, separation in resp_sep_combinations:
+        obsdata = impdata.get_exceedences(when = customrange, respagg = respagg) # pd.Series of binaries
+        linedata = impdata.get_predictions(when = customrange, respagg = respagg, separation = separation) # Also pd.Series
+        ax.plot(linedata, label = f'pred: {respagg} at {separation}')
+        ax.scatter(x = obsdata.loc[obsdata].index, y = linedata.loc[obsdata], label = f'obs: {respagg} > {impdata.quantile} = True')
+
+    ax.legend()
+    ax.set_xlabel('time')
+    ax.set_ylabel('probability')
+    return fig, ax
+    
+
 
