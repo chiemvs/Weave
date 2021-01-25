@@ -416,19 +416,20 @@ def get_forest_properties(forest: Union[RandomForestRegressor,RandomForestClassi
     else:
         return pd.Series(counts.mean(axis = 0), index = pd.Index(properties, name = 'properties'))
 
-def compute_forest_shaps(model: Callable, X_in, y_in, X_val = None, y_val = None, on_validation = True, bg_from_training = True, sample = 'standard', n_folds = 10, split_on_year = True, explainer_kwargs = dict(), shap_kwargs = dict(check_additivity = True)) -> pd.DataFrame:
+def compute_forest_shaps(model: Callable, X_in, y_in, X_val = None, y_val = None, on_validation = True, use_background = True, bg_from_training = True, sample_background = 'standard', n_folds = 10, split_on_year = True, explainer_kwargs = dict(), shap_kwargs = dict(check_additivity = True)) -> pd.DataFrame:
     """
     Computation of (non-interaction) SHAP values through shap.TreeExplainer. Outputs a frame of shap values with same dimensions as X
-    A non-fitted forest (classifier or regressor), potentially inside a hybrid model, options to get the background data from the training or the validation
+    A non-fitted forest (classifier or regressor), potentially inside a hybrid model, options to get the background data from the training or the validation, or not use background at all
     the sampling of the background can for instance be without balancing, but also in the case of classification
-    with only positives or negatives
+    with only negatives (what makes the exceedence differ from a case where there are no exceedences) but with changing base probability this not advised 
+    Additionally with 'correlation' the background can be constructed with a masker doing grouped masking
     other explainer kwargs are for instance a possible link function, or model_output
     shap kwargs are for instance check_additivity
     Cross-validation if X_val and y_val are not supplied
     """
-    assert sample in ['standard','negative','positive']
+    assert sample_background in ['standard','negative','correlation']
     max_samples = 500
-    logging.debug(f'TreeShap will be started for {"validation" if on_validation else "training"}, with background data from {"validation" if not bg_from_training else "training"}, event sampling is {sample}')
+    logging.debug(f'TreeShap will be started for {"validation" if on_validation else "training"}, using background data = {use_background}, sampled from {"validation" if not bg_from_training else "training"}, event sampling is {sample_background}')
     # Use similar setup as fit_predict_evaluate, with an inner_func that is potentially called multiple times
     def inner_func(model, X_train, y_train, X_val: pd.DataFrame, y_val: pd.Series) -> pd.DataFrame:
         """
@@ -445,22 +446,22 @@ def compute_forest_shaps(model: Callable, X_in, y_in, X_val = None, y_val = None
             X_bg_set, y_bg_set = X_train, y_train
         else:
             X_bg_set, y_bg_set = X_val, y_val
-        if sample == 'standard':
+        if sample_background == 'standard':
             background = shap.maskers.Independent(X_bg_set, max_samples = max_samples)
-        elif sample == 'negative':
+        elif sample_background == 'negative':
             background = shap.maskers.Independent(X_bg_set.loc[~y_bg_set,:], max_samples = max_samples)
         else:
-            background = shap.maskers.Independent(X_bg_set.loc[y_bg_set,:], max_samples = max_samples)
+            background = shap.maskers.Partition(X_bg_set.loc[y_bg_set,:], max_samples = max_samples, clustering = 'correlation')
        
         if isinstance(model, HybridExceedenceModel): # In this case we interpret the regressor in probability space, not the logistic base rate model for climate change beneath it.
-            explainer = shap.TreeExplainer(model = model.rf, data = background, feature_perturbation = 'interventional', **explainer_kwargs)
+            explainer = shap.TreeExplainer(model = model.rf, data = background if use_background else None, **explainer_kwargs) # feature perturbation is by default interventional when data is not None, else 'tree_path_dependent'
         else:
-            explainer = shap.TreeExplainer(model = model, data = background, feature_perturbation = 'interventional', **explainer_kwargs)
+            explainer = shap.TreeExplainer(model = model, data = background if use_background else None, **explainer_kwargs)
 
         shap_values = explainer.shap_values(X_val if on_validation else X_train, **shap_kwargs) # slow. Outputs a numpy ndarray or a list of them when classifying. We need to add columns and indices
         if isinstance(model, RandomForestClassifier):
             shap_values = shap_values[model.classes_.tolist().index(True)] # Only the probabilities for the positive case
-            explainer.expected_value = explainer.expected_value[model.classes_.tolist().index(True)] # Base probability / frequency (potentially through a link function) according to the background data. This plus the average shap sum should add up to the climatological probability
+            explainer.expected_value = explainer.expected_value[model.classes_.tolist().index(True)] # Base probability / frequency (potentially through a link function) according to the background data (or path dependence). This plus the average shap sum should add up to the climatological probability
         frame = pd.DataFrame(shap_values.T, columns = X_val.index if on_validation else X_train.index, index = X_val.columns if on_validation else X_train.columns) # Transpose because we want to match the format of permutation importance
         # Now we want to add 'expected_value' as another 'variable', Taking a used value (same dtype) as dummy for the other levels
         dummy_index = list(frame.index[0])

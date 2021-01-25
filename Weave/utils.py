@@ -9,7 +9,10 @@ import numpy as np
 import xarray as xr
 import pandas as pd
 import ctypes as ct
-import matplotlib.pyplot as plt
+try:
+    import matplotlib.pyplot as plt
+except ImportError:
+    pass
 from collections import namedtuple
 from typing import Union, Callable, Tuple
 from scipy.stats import rankdata, spearmanr, pearsonr, weightedtau, t
@@ -87,6 +90,9 @@ def nanquantile(array: np.ndarray, q: float) -> np.ndarray:
     fc_equal_k_mask = f_arr == c_arr
 
     # linear interpolation (like numpy percentile) takes the fractional part of desired position
+    floor_val = _zvalue_from_index(arr=array, ind=f_arr) * (c_arr - k_arr)
+    ceil_val = _zvalue_from_index(arr=array, ind=c_arr) * (k_arr - f_arr)
+
     floor_val = _zvalue_from_index(arr=array, ind=f_arr) * (c_arr - k_arr)
     ceil_val = _zvalue_from_index(arr=array, ind=c_arr) * (k_arr - f_arr)
 
@@ -371,9 +377,6 @@ def get_timeserie_properties(series: pd.Series, submonths: list = None, scale_tr
     """
     if not submonths is None:
         series = series.loc[series.index.month.map(lambda m: m in submonths)]
-    std = series.std()
-    mean = series.mean() 
-    length = len(series)
     n_nan = series.isna().sum()
     series = series.dropna() # Remove nans
     lm = LinearRegression()
