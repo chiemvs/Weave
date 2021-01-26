@@ -466,7 +466,10 @@ def compute_forest_shaps(model: Callable, X_in, y_in, X_val = None, y_val = None
         # Now we want to add 'expected_value' as another 'variable', Taking a used value (same dtype) as dummy for the other levels
         dummy_index = list(frame.index[0])
         dummy_index[frame.index.names.index('variable')] = 'expected_value'
-        frame.loc[tuple(dummy_index),:] = explainer.expected_value
+        if len(explainer.expected_value) == 1: # Only one expectation value
+            frame.loc[tuple(dummy_index),:] = float(explainer.expected_value)
+        else:
+            frame.loc[tuple(dummy_index),:] = explainer.expected_value # Actually not sure when a whole array is filled with one entry per obs.
         return frame 
 
     if (X_val is None) or (y_val is None):
