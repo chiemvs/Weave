@@ -652,7 +652,6 @@ def data_for_shapplot(impdata: ImportanceData, selection: pd.DataFrame, fit_base
     assert isinstance(selection, pd.DataFrame), 'Need columns for this, if only a single timeslice e.g. select with .iloc[:,[100]]'
     respagg = selection.index.get_level_values('respagg').unique() # Potentially passing a pd.Index to get_baserate
     assert len(respagg) == 1, 'A shap plot should contain only the contributions for one response time aggregation' 
-    X_vals = impdata.get_matching_X(selection)
 
     if not fit_base:
         base_value = np.unique(impdata.get_matching(impdata.expvals, selection))
@@ -662,8 +661,16 @@ def data_for_shapplot(impdata: ImportanceData, selection: pd.DataFrame, fit_base
     assert len(base_value) == 1, f'the base_value should be unique, your selection potentially contains multiple folds, or if fit_base={fit_base} the base rate of the hybrid model could change with time'
     returndict = dict(base_value = float(base_value))
 
-    selection, names, dtypes = collapse_restore_multiindex(selection, axis = 0, ignore_level = ['lag'], inplace = False)
-    returndict.update(dict(shap_values = selection.values.T, features = X_vals.values.T, feature_names = selection.index))
+    try:
+        X_vals = impdata.get_matching_X(selection)
+        returndict.update(features = X_vals.values.T)
+    except: # In case e.g. clustid is aggregated out
+        warnings.warn('Could not find X matching the selection, indexes might not correspond, proceed without feature values')
+        returndict.update(features = None)
+
+    lagpresent = 'lag' in selection.index.names 
+    selection, names, dtypes = collapse_restore_multiindex(selection, axis = 0, ignore_level = ['lag'] if lagpresent else None, inplace = False)
+    returndict.update(dict(shap_values = selection.values.T, feature_names = selection.index))
 
     return returndict 
 
