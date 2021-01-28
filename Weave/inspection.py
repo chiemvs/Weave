@@ -291,11 +291,14 @@ class FacetMapResult(object):
     The result is returned from a call to some mapinterface methods.
     columnkeys could be absent, in that case the listofarrays is not nested (for instance, just many shapley combinations mapped to clusters)
     However it can also be present: e.g. the different types of data with get_anom, in that case the listofarrays is nested row-major
+    minimums and maximums are optional. Could be useful for plotting. These are not nested lists
     """
-    def __init__(self, rowkeys, columnkeys, listofarrays):
+    def __init__(self, rowkeys, listofarrays, columnkeys = None, minimums: np.ndarray = None, maximums: np.ndarray = None):
         self.rowkeys = rowkeys
         self.columnkeys = columnkeys
         self.listofarrays = listofarrays
+        self.minimums = minimums
+        self.maximums = maximums
 
 class MapInterface(object):
     """
@@ -393,16 +396,21 @@ class MapInterface(object):
                 else:
                     pass
             clustidmap.name = impvals.name
+            clustidmap.coords.update({'fold':fold}) # Read the fieldfold, now give it the fold numer of the fold it belongs to.
             return clustidmap 
 
         grouped = imp.groupby(['fold','variable','timeagg','separation']) # Discover what is in the imp series
         results = [] 
         keys = [] 
+        minimums = [] # Just some statistics useful for plotting later
+        maximums = []
         for key, series in grouped: # key tuple is composed of (variable, timeagg, separation)
             results.append(map_to_field(series, *key, remove_unused = remove_unused))
             keys.append(key) 
+            minimums.append(float(series.min()))
+            maximums.append(float(series.max()))
         keys = pd.MultiIndex.from_tuples(keys, names = ['fold','variable','timeagg','separation'])
-        return FacetMapResult(keys, None, results)
+        return FacetMapResult(rowkeys = keys, listofarrays = results, minimums = np.array(minimums), maximums = np.array(maximums))
 
     def get_anoms(self, imp: Union[pd.Series, pd.DataFrame], timestamp: pd.Timestamp = None, mask_with_clustid: bool = True, correlation_too: bool = True) -> FacetMapResult:
         """
@@ -457,7 +465,7 @@ class MapInterface(object):
             rowkeys.append(key) 
         rowkeys = pd.MultiIndex.from_tuples(rowkeys, names = ['variable','timeagg','separation'])
         columnkeys = pd.Index(columnkeys)
-        return FacetMapResult(rowkeys, columnkeys, results)
+        return FacetMapResult(rowkeys = rowkeys, columnkeys = columnkeys, listofarrays = results)
 
 
 def dotplot(df: pd.Series, custom_order: list = None, sizescaler = 50, alphascaler = 1, nlegend_items = 4):
@@ -517,12 +525,13 @@ def dotplot(df: pd.Series, custom_order: list = None, sizescaler = 50, alphascal
     return fig, axes
 
 
-def mapplot(mapresult: FacetMapResult, wrap_per_row: int = 1, over_columns: str = None):
+def mapplot(mapresult: FacetMapResult, wrap_per_row: int = 1, over_columns: str = None, match_scales: bool = False):
     """
     No functionality to subset-select from the mapresult. This can be achieved by inputting a smaller dataframe/series to MapInterface methods
     For the case of absent columnkeys there is the option to plot vs a level in the rowindex
     otherwise the panels are distributed according wrap_per_row
     tuples are immutable which is the reason that FacetMapresult is not a named-tuple
+    match_scales will put all maps on the same colorscale
     """
     if mapresult.columnkeys is None: # Then the option to check over_columns. Nevertheless we need to create a nesting ourselves
         assert not isinstance(mapresult.listofarrays[0], list), 'We should not be dealing with a nested list when columnkeys are absent'
@@ -555,13 +564,13 @@ def mapplot(mapresult: FacetMapResult, wrap_per_row: int = 1, over_columns: str 
 
     nrows = len(mapresult.listofarrays)
     ncols = len(mapresult.listofarrays[0]) 
-
+    
     fig, axes = plt.subplots(nrows = nrows, ncols = ncols, squeeze = False, sharex = True, sharey = True, figsize = (4*ncols,3.5 * nrows))
     for i, rowlist in enumerate(mapresult.listofarrays):
         for j, array in enumerate(rowlist):
             ax = axes[i,j]
-            armin = array.min()
-            armax = array.max()
+            armin = array.min() if not match_scales else mapresult.minimums.min()
+            armax = array.max() if not match_scales else mapresult.maximums.max()
             absmax = max(abs(armin),armax)
             if armin < 0 and armax > 0: # If positive and negative values are present then we want to center.
                 cmap = plt.get_cmap('RdBu_r')
@@ -596,7 +605,7 @@ def barplot(impdf: Union[pd.Series,pd.DataFrame], n_most_important = 10, ignore_
     fig, axes = plt.subplots(nrows = 1, ncols = ncols, squeeze = False, sharex = True, figsize = (4*ncols,4))
 
     for i, col in enumerate(impdf.columns):
-        sorted_by_col = impdf.loc[:,col].sort_values(ascending = False).iloc[:n_most_important]
+        sorted_by_col = impdf.loc[:,col].sort_values(ascending = False).iloc[(n_most_important - 1)::-1]
         ax = axes[0,i]
         ax.barh(range(n_most_important), width = sorted_by_col)
         ax.set_yticks(range(n_most_important))
