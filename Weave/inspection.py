@@ -467,6 +467,47 @@ class MapInterface(object):
         columnkeys = pd.Index(columnkeys)
         return FacetMapResult(rowkeys = rowkeys, columnkeys = columnkeys, listofarrays = results)
 
+    def fraction_significant(self, timeaggs: list = None, plot: bool = True, fold: int = None):
+        """
+        For the present variables, compute the amount of non-nan gridcells in the domain
+        of each of variable and express it as a fraction.
+        When correlations are loaded this fraction corresponds to the fraction of significant cells
+        if fold is not given we compute an average over them
+        if plot then plot fraction against separation with a panel per desired timeagg
+        else the compted amounts and fractions are returned as a frame
+        """
+        results = []
+        for variable in self.presentvars:
+            array = getattr(self, variable)['correlation']
+            n_signif = array.count(['latitude','longitude']).to_dataframe()
+            n_signif['n'] = len(array.coords['latitude']) * len(array.coords['longitude'])
+            n_signif['fraction'] = n_signif['correlation'] / n_signif['n']
+            results.append(n_signif)
+        results = pd.concat(results, keys = pd.Index(self.presentvars, name = 'variable'), axis = 0)
+        if (fold is None) and ('fold' in results.index.names):
+            groupers = list(results.index.names)
+            groupers.remove('fold')
+            results = results.groupby(groupers).mean()
+        if not plot:
+            return results
+        else:
+            timeaggs = results.index.get_level_values('timeagg').unique() if timeaggs is None else timeaggs
+            fig, axes = plt.subplots(nrows = 1, ncols = len(timeaggs), sharex = True, sharey = True, figsize = (15,3.5), squeeze = False)
+            for i, timeagg in enumerate(timeaggs):
+                ax = axes[0,i]
+                if not fold is None:
+                    frame = results.loc[(slice(None),timeagg,slice(None),fold),'fraction'].unstack('variable')
+                else:
+                    frame = results.loc[(slice(None),timeagg,slice(None)),'fraction'].unstack('variable')
+                ax.plot(frame.index.get_level_values('separation'), frame.values)
+                ax.set_title(f'timeagg: {timeagg}, fold: {fold}')
+                ax.set_xlabel('separation [days]')
+                if i == 0:
+                    ax.set_ylabel('fraction significant cells')
+                if i == (len(timeaggs) - 1):
+                    ax.legend(frame.columns.values)
+            return fig, axes
+
 
 def dotplot(df: pd.Series, custom_order: list = None, sizescaler = 50, alphascaler = 1, nlegend_items = 4):
     """
