@@ -309,13 +309,28 @@ class MapInterface(object):
     related to important variables at a certain timestep
     """
 
-    def __init__(self, corclustpath: Path, anompath: Path = Path(os.path.expanduser('~/processed/'))) -> None:
+    def __init__(self, corclustpath: Path, anompath: Path = Path(os.path.expanduser('~/processed/')), impdata: ImportanceData = None) -> None:
         """
         Default for anompath. Usually does not vary. corclustpath does (depending on clustering parameters and correlation measure)
+        The original impdata object is optional but needs to be supplied when wanting to load validation fold specific patterns
+        The translation table of impdata provides fieldfold numbers belonging to regular fold 
         """
         self.basepath = corclustpath
         self.anompath = anompath
         self.presentvars = []
+        if not impdata is None:
+            self.lookuptable = impdata.lookup
+
+    def lookup(self, regularfold: int) -> int:
+        """
+        Called to lookup the fieldfold belonging to regular fold
+        """
+        if hasattr(self, 'lookuptable'):
+            fieldfold = self.lookuptable.loc[regularfold, 'fieldfold']
+            logging.debug(f'Fold {regularfold} leads to fieldfold {fieldfold}')
+            return fieldfold 
+        else:
+            raise AttributeError('lookuptable is not present. Please initialize the MapInrerface with an ImportanceData object')
 
     def get_field(self, fold: int, variable: str, timeagg: int, separation: int, what: str = 'clustid') -> xr.DataArray:
         """
@@ -359,14 +374,13 @@ class MapInterface(object):
             setattr(self, variable, xr.concat([getattr(self,variable), ds], dim = 'timeagg')) 
             logging.debug(f'{variable} was present, concatenated timeagg {timeagg} to existing')
 
-    def map_to_fields(self, impdata: ImportanceData, imp: pd.Series, remove_unused: bool = True) -> FacetMapResult:
+    def map_to_fields(self, imp: pd.Series, remove_unused: bool = True) -> FacetMapResult:
         """
         Mapping a selection of properly indexed importance data to the clustids
         associated to the folds/variables/timeaggs/separations 
         it finds the unique groups. attemps mapping
         respagg does not play any role (not a property of input)
         returns a multiindex for the groups and a list with the filled clustid fields
-        The original impdata object needs to be supplied because of the lookup table to get the fieldfold numbers belonging to regular fold 
         """
         assert 'clustid' in imp.index.names, 'mapping to fields by means of clustid, should be present in index, not be reduced over'
         assert isinstance(imp, pd.Series), 'Needs to be a series (preferably with meaningful name) otherwise indexing will fail'
@@ -380,8 +394,7 @@ class MapInterface(object):
             the assigned importance has the exact value of a clustid integer called later
             """
             logging.debug(f'attempt field read and importance mapping for {variable}, fold {fold}, timeagg {timeagg}, separation {separation}')
-            fieldfold = impdata.lookup.loc[fold,'fieldfold'] 
-            logging.debug(f'Fold {fold} leads to fieldfold {fieldfold}')
+            fieldfold = self.lookup(fold) 
             clustidmap = self.get_field(fold = fieldfold, variable = variable, timeagg = timeagg, separation = separation, what = 'clustid').copy() # Copy because replacing values. Don't want that to happen to our cached dataset
             ids_in_map = np.unique(clustidmap) # still nans possible
             ids_in_map = ids_in_map[~np.isnan(ids_in_map)].astype(int) 
@@ -446,24 +459,28 @@ class MapInterface(object):
             anom_field = t.compute(nprocs = 1, ndayagg = timeagg, rolling = False) # Only one process is needed (as we aggregate only one slice). Because the slice is the exact right length, rolling could be both True or False, both result in a time dim of length 1
             return anom_field.squeeze() # Get rid of the dimension of length 1 (timestamp becomes dimensionless coord
 
-        grouped = imp.groupby(['variable','timeagg','separation']) # Discover what is in the imp series
+        grouped = imp.groupby(['fold','variable','timeagg','separation']) # Discover what is in the imp series A single fold is not neccessarily needed, the anomaly is independent of that
         results = [] 
         rowkeys = [] 
         columnkeys = ['anom', 'clustid'] 
         if correlation_too:
             columnkeys.insert(1,'correlation') # placed at first index, because like the anom (0) it will potentially be masked, and because like clustid (-1) it can be read with self.get_field
-        for key, _ in grouped: # key tuple is composed of (variable, timeagg, separation)
+        for key, _ in grouped: # key tuple is composed of (fold, variable, timeagg, separation)
             within_group_results = [None] * len(columnkeys)  # Will contain the anoms potentially more (forms one row in the return list) 
-            within_group_results[0] = get_anom(*key) # Special function. For correlation and clustid we already have self.get_field
+            within_group_results[0] = get_anom(*key[1:]) # Special function. For correlation and clustid we already have self.get_field. Fold is not neccesary here
             for extra in columnkeys[1:]:
-                within_group_results[columnkeys.index(extra)] = self.get_field(*key, what = extra)
+                fieldfold = self.lookup(key[0]) # To load the correct cluster of correlation field we need to lookup the fieldfold and generate a new key
+                newkey = (fieldfold,) + key[1:] 
+                extramap = self.get_field(*newkey, what = extra)
+                extramap.coords.update({'fold':key[0]}) # Read the fieldfold, now give it the fold numer of the fold it belongs to.
+                within_group_results[columnkeys.index(extra)] = extramap 
             if mask_with_clustid:
                 for index in range(len(within_group_results[:-1])): # Clustid is excluded, cannot be masked with itself
                     within_group_results[index] = within_group_results[index].where(~within_group_results[-1].isnull(), other = np.nan) # Preserve where a cluster is found. np.nan otherwise
 
             results.append(within_group_results)
             rowkeys.append(key) 
-        rowkeys = pd.MultiIndex.from_tuples(rowkeys, names = ['variable','timeagg','separation'])
+        rowkeys = pd.MultiIndex.from_tuples(rowkeys, names = ['fold','variable','timeagg','separation'])
         columnkeys = pd.Index(columnkeys)
         return FacetMapResult(rowkeys = rowkeys, columnkeys = columnkeys, listofarrays = results)
 
@@ -678,13 +695,13 @@ def scatterplot(impdata: ImportanceData, selection: pd.DataFrame, alpha = 0.5, q
         train_indexer = ~y_summer.columns.isin(y_summer.loc[:,validation_indexer].columns) # Inverting the slice
         ax.scatter(x = X_summer.loc[:,train_indexer].values.squeeze(), y = y_summer.loc[:,train_indexer].values.squeeze(), alpha = alpha, label = 'train')
         ax.scatter(x = X_summer.loc[:,validation_indexer].values.squeeze(), y = y_summer.loc[:,validation_indexer].values.squeeze(), alpha = alpha, label = 'validation')
-        ax.set_title(f'validation: {validation_indexer.start.strftime("%Y-%m-%d")} - {validation_indexer.stop.strftime("%Y-%m-%d")}')
+        ax.set_title(f'validation: {validation_indexer.start.strftime("%Y-%m-%d")} - {validation_indexer.stop.strftime("%Y-%m-%d")}, imp: {float(np.round(selection.values,3))}')
     else:
         ax.scatter(x = X_summer.values.squeeze(), y = y_summer.values.squeeze(), alpha = alpha, label = 'full')
 
     # Some general annotation
     if not quantile is None:
-        ax.hlines(y = y_summer.quantile(quantile, axis = 1), xmin = X_summer.min(axis = 1), xmax = X_summer.max(axis =1), label = f'q{quantile}') # y was loaded as already detrended
+        ax.hlines(y = y_summer.quantile(quantile, axis = 1), xmin = X_summer.min(axis = 1), xmax = X_summer.max(axis =1), label = f'q{quantile}') # y was loaded as trended or detrended. depening on Hybrid model presence at init of impdata
     ax.legend()
     ax.set_xlabel(f'{X_summer.index[0]}')
     ax.set_ylabel(f'response agg: {y_summer.index[0]}')
