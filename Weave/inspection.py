@@ -19,9 +19,14 @@ try:
 except ImportError:
     pass
 
+try:
+    import cartopy.crs as ccrs
+except ImportError:
+    pass
+
 from .processing import TimeAggregator
 from .models import map_foldindex_to_groupedorder, get_validation_fold_time, crossvalidate, HybridExceedenceModel, fit_predict
-from .utils import collapse_restore_multiindex
+from .utils import collapse_restore_multiindex, Region, get_nhplus
 
 def scale_high_to_high(series: pd.Series, fill_na: bool = False):
     """
@@ -583,13 +588,15 @@ def dotplot(df: pd.Series, custom_order: list = None, sizescaler = 50, alphascal
     return fig, axes
 
 
-def mapplot(mapresult: FacetMapResult, wrap_per_row: int = 1, over_columns: str = None, match_scales: bool = False):
+def mapplot(mapresult: FacetMapResult, wrap_per_row: int = 1, over_columns: str = None, match_scales: bool = False, fancyplot: bool = True, region: Region = get_nhplus(), projection = None):
     """
     No functionality to subset-select from the mapresult. This can be achieved by inputting a smaller dataframe/series to MapInterface methods
     For the case of absent columnkeys there is the option to plot vs a level in the rowindex
     otherwise the panels are distributed according wrap_per_row
     tuples are immutable which is the reason that FacetMapresult is not a named-tuple
     match_scales will put all maps on the same colorscale
+    Fancyplot uses cartopy for the map, usually global, but can also be limited to a region
+    Uses the Millweide projection as the default, but another initialized one can be supplied
     """
     if mapresult.columnkeys is None: # Then the option to check over_columns. Nevertheless we need to create a nesting ourselves
         assert not isinstance(mapresult.listofarrays[0], list), 'We should not be dealing with a nested list when columnkeys are absent'
@@ -601,9 +608,8 @@ def mapplot(mapresult: FacetMapResult, wrap_per_row: int = 1, over_columns: str 
             columnkeys = None
             for index in range(0,len(mapresult.listofarrays),wrap_per_row):
                 listofarrays.append(mapresult.listofarrays[index:(index+wrap_per_row)]) # Slice is allowed to overshoot which is good
-            #mapresult.listofarrays = [mapresult.listofarrays[index:(index+wrap_per_row)] for index in range(0,len(mapresult.listofarrays),wrap_per_row)] # Slice is allowed to overshoot which is good
         else: # makes nested, but also set the columnkeys
-            dummyframe = pd.Series(data = np.nan, index = mapresult.rowkeys).unstack(over_columns)
+            dummyframe = pd.Series(data = np.nan, index = mapresult.rowkeys).unstack(over_columns) # Unstack might generate combinations that are not there.
             rowkeys = dummyframe.index # Not overwritng we still need them to search, but also immutable because it is a tuple
             columnkeys = dummyframe.columns # Not overwritng, we still need them to search
             listofarrays = []
@@ -612,8 +618,12 @@ def mapplot(mapresult: FacetMapResult, wrap_per_row: int = 1, over_columns: str 
                 for columnkey in columnkeys:
                     originalkey = list(rowkey)
                     originalkey.insert(mapresult.rowkeys.names.index(over_columns),columnkey) # insert the column value at the right level
-                    originalindex = mapresult.rowkeys.get_loc(tuple(originalkey))  
-                    rowlist.append(mapresult.listofarrays[originalindex])
+                    try:
+                        originalindex = mapresult.rowkeys.get_loc(tuple(originalkey))  
+                        rowlist.append(mapresult.listofarrays[originalindex])
+                    except KeyError: # in this case it is an unstack combination that is not present
+                        rowlist.append(None) # Leave the entry empty 
+
                 listofarrays.append(rowlist)
         # Now we can reset
         mapresult.listofarrays = listofarrays
@@ -622,22 +632,41 @@ def mapplot(mapresult: FacetMapResult, wrap_per_row: int = 1, over_columns: str 
 
     nrows = len(mapresult.listofarrays)
     ncols = len(mapresult.listofarrays[0]) 
-    
-    fig, axes = plt.subplots(nrows = nrows, ncols = ncols, squeeze = False, sharex = True, sharey = True, figsize = (4*ncols,3.5 * nrows))
+    if fancyplot:
+        subplot_kw = dict(projection=ccrs.Mollweide() if (projection is None) else projection) # The desired projection
+        array_crs = ccrs.PlateCarree() # what projection the data is in (regular lat lon grid)
+    else:
+        subplot_kw = dict()
+
+    fig, axes = plt.subplots(nrows = nrows, ncols = ncols, squeeze = False, sharex = True, sharey = True, figsize = (4*ncols,3.5 * nrows), subplot_kw = subplot_kw)
     for i, rowlist in enumerate(mapresult.listofarrays):
         for j, array in enumerate(rowlist):
             ax = axes[i,j]
-            armin = array.min() if not match_scales else mapresult.minimums.min()
-            armax = array.max() if not match_scales else mapresult.maximums.max()
-            absmax = max(abs(armin),armax)
-            if armin < 0 and armax > 0: # If positive and negative values are present then we want to center.
-                cmap = plt.get_cmap('RdBu_r')
-                im = ax.pcolormesh(array, vmin = -absmax, vmax = absmax, cmap = cmap) 
-            else:
-                im = ax.pcolormesh(array, vmin = armin, vmax = armax) 
-            cbar = fig.colorbar(im, ax = ax)
-            cbar.set_label(f'{array.name} [{array.units}]')
-            ax.set_title(array._title_for_slice())
+            if not array is None:
+                armin = array.min() if not match_scales else mapresult.minimums.min()
+                armax = array.max() if not match_scales else mapresult.maximums.max()
+                absmax = max(abs(armin),armax)
+                if armin < 0 and armax > 0: # If positive and negative values are present then we want to center the colorscale
+                    kwargs = dict(cmap = plt.get_cmap('RdBu_r'), vmin = -absmax, vmax = absmax)
+                else:
+                    kwargs = dict(vmin = armin, vmax = armax)
+                if not fancyplot:
+                    im = ax.pcolormesh(array,**kwargs) 
+                else:
+                    if not region is None:
+                        extent = np.array(region[1:])[[1,3,2,0]]  # drop the name and reorder to x0,x1,y0,y1 
+                        ax.set_extent(tuple(extent), crs = array_crs)
+                    ax.coastlines()
+                    # Define lats and lons at grid corners for pcolormesh + projection
+                    lats = array.latitude.values # Interpreted as northwest corners (90 is in there)
+                    lons = array.longitude.values # Interpreted as northwest corners (-180 is in there, 180 not)
+                    lats = np.concatenate([lats[[0]] - np.diff(lats)[0], lats], axis = 0) # Adding the sourthern edge 
+                    lons = np.concatenate([lons, lons[[-1]] + np.diff(lons)[0]], axis = 0)# Adding the eastern edge
+                    #im = ax.contourf(array.longitude,array.latitude,array.values, transform = array_crs, **kwargs) #Cannot currently do pcolormesh needs lats and lons at gridcorners 
+                    im = ax.pcolormesh(lons,lats,array.values, shading = 'flat', transform = array_crs, **kwargs) #Cannot currently do pcolormesh needs lats and lons at gridcorners 
+                cbar = fig.colorbar(im, ax = ax)
+                cbar.set_label(f'{array.name} [{array.units}]')
+                ax.set_title(array._title_for_slice())
             if j == 0:
                 ax.set_ylabel(f'{mapresult.rowkeys[i]}')
     return fig, axes
@@ -769,5 +798,3 @@ def yplot(impdata: ImportanceData, resp_sep_combinations: List[Tuple[int]] = [(3
     ax.set_ylabel('probability')
     return fig, ax
     
-
-
