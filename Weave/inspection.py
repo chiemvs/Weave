@@ -19,9 +19,14 @@ try:
 except ImportError:
     pass
 
+try:
+    import cartopy.crs as ccrs
+except ImportError:
+    pass
+
 from .processing import TimeAggregator
 from .models import map_foldindex_to_groupedorder, get_validation_fold_time, crossvalidate, HybridExceedenceModel, fit_predict
-from .utils import collapse_restore_multiindex
+from .utils import collapse_restore_multiindex, Region, get_nhplus
 
 def scale_high_to_high(series: pd.Series, fill_na: bool = False):
     """
@@ -291,11 +296,14 @@ class FacetMapResult(object):
     The result is returned from a call to some mapinterface methods.
     columnkeys could be absent, in that case the listofarrays is not nested (for instance, just many shapley combinations mapped to clusters)
     However it can also be present: e.g. the different types of data with get_anom, in that case the listofarrays is nested row-major
+    minimums and maximums are optional. Could be useful for plotting. These are not nested lists
     """
-    def __init__(self, rowkeys, columnkeys, listofarrays):
+    def __init__(self, rowkeys, listofarrays, columnkeys = None, minimums: np.ndarray = None, maximums: np.ndarray = None):
         self.rowkeys = rowkeys
         self.columnkeys = columnkeys
         self.listofarrays = listofarrays
+        self.minimums = minimums
+        self.maximums = maximums
 
 class MapInterface(object):
     """
@@ -306,13 +314,28 @@ class MapInterface(object):
     related to important variables at a certain timestep
     """
 
-    def __init__(self, corclustpath: Path, anompath: Path = Path(os.path.expanduser('~/processed/'))) -> None:
+    def __init__(self, corclustpath: Path, anompath: Path = Path(os.path.expanduser('~/processed/')), impdata: ImportanceData = None) -> None:
         """
         Default for anompath. Usually does not vary. corclustpath does (depending on clustering parameters and correlation measure)
+        The original impdata object is optional but needs to be supplied when wanting to load validation fold specific patterns
+        The translation table of impdata provides fieldfold numbers belonging to regular fold 
         """
         self.basepath = corclustpath
         self.anompath = anompath
         self.presentvars = []
+        if not impdata is None:
+            self.lookuptable = impdata.lookup
+
+    def lookup(self, regularfold: int) -> int:
+        """
+        Called to lookup the fieldfold belonging to regular fold
+        """
+        if hasattr(self, 'lookuptable'):
+            fieldfold = self.lookuptable.loc[regularfold, 'fieldfold']
+            logging.debug(f'Fold {regularfold} leads to fieldfold {fieldfold}')
+            return fieldfold 
+        else:
+            raise AttributeError('lookuptable is not present. Please initialize the MapInrerface with an ImportanceData object')
 
     def get_field(self, fold: int, variable: str, timeagg: int, separation: int, what: str = 'clustid') -> xr.DataArray:
         """
@@ -356,14 +379,13 @@ class MapInterface(object):
             setattr(self, variable, xr.concat([getattr(self,variable), ds], dim = 'timeagg')) 
             logging.debug(f'{variable} was present, concatenated timeagg {timeagg} to existing')
 
-    def map_to_fields(self, impdata: ImportanceData, imp: pd.Series, remove_unused: bool = True) -> FacetMapResult:
+    def map_to_fields(self, imp: pd.Series, remove_unused: bool = True) -> FacetMapResult:
         """
         Mapping a selection of properly indexed importance data to the clustids
         associated to the folds/variables/timeaggs/separations 
         it finds the unique groups. attemps mapping
         respagg does not play any role (not a property of input)
         returns a multiindex for the groups and a list with the filled clustid fields
-        The original impdata object needs to be supplied because of the lookup table to get the fieldfold numbers belonging to regular fold 
         """
         assert 'clustid' in imp.index.names, 'mapping to fields by means of clustid, should be present in index, not be reduced over'
         assert isinstance(imp, pd.Series), 'Needs to be a series (preferably with meaningful name) otherwise indexing will fail'
@@ -377,8 +399,7 @@ class MapInterface(object):
             the assigned importance has the exact value of a clustid integer called later
             """
             logging.debug(f'attempt field read and importance mapping for {variable}, fold {fold}, timeagg {timeagg}, separation {separation}')
-            fieldfold = impdata.lookup.loc[fold,'fieldfold'] 
-            logging.debug(f'Fold {fold} leads to fieldfold {fieldfold}')
+            fieldfold = self.lookup(fold) 
             clustidmap = self.get_field(fold = fieldfold, variable = variable, timeagg = timeagg, separation = separation, what = 'clustid').copy() # Copy because replacing values. Don't want that to happen to our cached dataset
             ids_in_map = np.unique(clustidmap) # still nans possible
             ids_in_map = ids_in_map[~np.isnan(ids_in_map)].astype(int) 
@@ -393,16 +414,21 @@ class MapInterface(object):
                 else:
                     pass
             clustidmap.name = impvals.name
+            clustidmap.coords.update({'fold':fold}) # Read the fieldfold, now give it the fold numer of the fold it belongs to.
             return clustidmap 
 
         grouped = imp.groupby(['fold','variable','timeagg','separation']) # Discover what is in the imp series
         results = [] 
         keys = [] 
+        minimums = [] # Just some statistics useful for plotting later
+        maximums = []
         for key, series in grouped: # key tuple is composed of (variable, timeagg, separation)
             results.append(map_to_field(series, *key, remove_unused = remove_unused))
             keys.append(key) 
+            minimums.append(float(series.min()))
+            maximums.append(float(series.max()))
         keys = pd.MultiIndex.from_tuples(keys, names = ['fold','variable','timeagg','separation'])
-        return FacetMapResult(keys, None, results)
+        return FacetMapResult(rowkeys = keys, listofarrays = results, minimums = np.array(minimums), maximums = np.array(maximums))
 
     def get_anoms(self, imp: Union[pd.Series, pd.DataFrame], timestamp: pd.Timestamp = None, mask_with_clustid: bool = True, correlation_too: bool = True) -> FacetMapResult:
         """
@@ -438,26 +464,71 @@ class MapInterface(object):
             anom_field = t.compute(nprocs = 1, ndayagg = timeagg, rolling = False) # Only one process is needed (as we aggregate only one slice). Because the slice is the exact right length, rolling could be both True or False, both result in a time dim of length 1
             return anom_field.squeeze() # Get rid of the dimension of length 1 (timestamp becomes dimensionless coord
 
-        grouped = imp.groupby(['variable','timeagg','separation']) # Discover what is in the imp series
+        grouped = imp.groupby(['fold','variable','timeagg','separation']) # Discover what is in the imp series A single fold is not neccessarily needed, the anomaly is independent of that
         results = [] 
         rowkeys = [] 
         columnkeys = ['anom', 'clustid'] 
         if correlation_too:
             columnkeys.insert(1,'correlation') # placed at first index, because like the anom (0) it will potentially be masked, and because like clustid (-1) it can be read with self.get_field
-        for key, _ in grouped: # key tuple is composed of (variable, timeagg, separation)
+        for key, _ in grouped: # key tuple is composed of (fold, variable, timeagg, separation)
             within_group_results = [None] * len(columnkeys)  # Will contain the anoms potentially more (forms one row in the return list) 
-            within_group_results[0] = get_anom(*key) # Special function. For correlation and clustid we already have self.get_field
+            within_group_results[0] = get_anom(*key[1:]) # Special function. For correlation and clustid we already have self.get_field. Fold is not neccesary here
             for extra in columnkeys[1:]:
-                within_group_results[columnkeys.index(extra)] = self.get_field(*key, what = extra)
+                fieldfold = self.lookup(key[0]) # To load the correct cluster of correlation field we need to lookup the fieldfold and generate a new key
+                newkey = (fieldfold,) + key[1:] 
+                extramap = self.get_field(*newkey, what = extra)
+                extramap.coords.update({'fold':key[0]}) # Read the fieldfold, now give it the fold numer of the fold it belongs to.
+                within_group_results[columnkeys.index(extra)] = extramap 
             if mask_with_clustid:
                 for index in range(len(within_group_results[:-1])): # Clustid is excluded, cannot be masked with itself
                     within_group_results[index] = within_group_results[index].where(~within_group_results[-1].isnull(), other = np.nan) # Preserve where a cluster is found. np.nan otherwise
 
             results.append(within_group_results)
             rowkeys.append(key) 
-        rowkeys = pd.MultiIndex.from_tuples(rowkeys, names = ['variable','timeagg','separation'])
+        rowkeys = pd.MultiIndex.from_tuples(rowkeys, names = ['fold','variable','timeagg','separation'])
         columnkeys = pd.Index(columnkeys)
-        return FacetMapResult(rowkeys, columnkeys, results)
+        return FacetMapResult(rowkeys = rowkeys, columnkeys = columnkeys, listofarrays = results)
+
+    def fraction_significant(self, timeaggs: list = None, plot: bool = True, fold: int = None):
+        """
+        For the present variables, compute the amount of non-nan gridcells in the domain
+        of each of variable and express it as a fraction.
+        When correlations are loaded this fraction corresponds to the fraction of significant cells
+        if fold is not given we compute an average over them
+        if plot then plot fraction against separation with a panel per desired timeagg
+        else the compted amounts and fractions are returned as a frame
+        """
+        results = []
+        for variable in self.presentvars:
+            array = getattr(self, variable)['correlation']
+            n_signif = array.count(['latitude','longitude']).to_dataframe()
+            n_signif['n'] = len(array.coords['latitude']) * len(array.coords['longitude'])
+            n_signif['fraction'] = n_signif['correlation'] / n_signif['n']
+            results.append(n_signif)
+        results = pd.concat(results, keys = pd.Index(self.presentvars, name = 'variable'), axis = 0)
+        if (fold is None) and ('fold' in results.index.names):
+            groupers = list(results.index.names)
+            groupers.remove('fold')
+            results = results.groupby(groupers).mean()
+        if not plot:
+            return results
+        else:
+            timeaggs = results.index.get_level_values('timeagg').unique() if timeaggs is None else timeaggs
+            fig, axes = plt.subplots(nrows = 1, ncols = len(timeaggs), sharex = True, sharey = True, figsize = (15,3.5), squeeze = False)
+            for i, timeagg in enumerate(timeaggs):
+                ax = axes[0,i]
+                if not fold is None:
+                    frame = results.loc[(slice(None),timeagg,slice(None),fold),'fraction'].unstack('variable')
+                else:
+                    frame = results.loc[(slice(None),timeagg,slice(None)),'fraction'].unstack('variable')
+                ax.plot(frame.index.get_level_values('separation'), frame.values)
+                ax.set_title(f'timeagg: {timeagg}, fold: {fold}')
+                ax.set_xlabel('separation [days]')
+                if i == 0:
+                    ax.set_ylabel('fraction significant cells')
+                if i == (len(timeaggs) - 1):
+                    ax.legend(frame.columns.values)
+            return fig, axes
 
 
 def dotplot(df: pd.Series, custom_order: list = None, sizescaler = 50, alphascaler = 1, nlegend_items = 4):
@@ -517,12 +588,15 @@ def dotplot(df: pd.Series, custom_order: list = None, sizescaler = 50, alphascal
     return fig, axes
 
 
-def mapplot(mapresult: FacetMapResult, wrap_per_row: int = 1, over_columns: str = None):
+def mapplot(mapresult: FacetMapResult, wrap_per_row: int = 1, over_columns: str = None, match_scales: bool = False, fancyplot: bool = True, region: Region = get_nhplus(), projection = None):
     """
     No functionality to subset-select from the mapresult. This can be achieved by inputting a smaller dataframe/series to MapInterface methods
     For the case of absent columnkeys there is the option to plot vs a level in the rowindex
     otherwise the panels are distributed according wrap_per_row
     tuples are immutable which is the reason that FacetMapresult is not a named-tuple
+    match_scales will put all maps on the same colorscale
+    Fancyplot uses cartopy for the map, usually global, but can also be limited to a region
+    Uses the Millweide projection as the default, but another initialized one can be supplied
     """
     if mapresult.columnkeys is None: # Then the option to check over_columns. Nevertheless we need to create a nesting ourselves
         assert not isinstance(mapresult.listofarrays[0], list), 'We should not be dealing with a nested list when columnkeys are absent'
@@ -534,9 +608,8 @@ def mapplot(mapresult: FacetMapResult, wrap_per_row: int = 1, over_columns: str 
             columnkeys = None
             for index in range(0,len(mapresult.listofarrays),wrap_per_row):
                 listofarrays.append(mapresult.listofarrays[index:(index+wrap_per_row)]) # Slice is allowed to overshoot which is good
-            #mapresult.listofarrays = [mapresult.listofarrays[index:(index+wrap_per_row)] for index in range(0,len(mapresult.listofarrays),wrap_per_row)] # Slice is allowed to overshoot which is good
         else: # makes nested, but also set the columnkeys
-            dummyframe = pd.Series(data = np.nan, index = mapresult.rowkeys).unstack(over_columns)
+            dummyframe = pd.Series(data = np.nan, index = mapresult.rowkeys).unstack(over_columns) # Unstack might generate combinations that are not there.
             rowkeys = dummyframe.index # Not overwritng we still need them to search, but also immutable because it is a tuple
             columnkeys = dummyframe.columns # Not overwritng, we still need them to search
             listofarrays = []
@@ -545,8 +618,12 @@ def mapplot(mapresult: FacetMapResult, wrap_per_row: int = 1, over_columns: str 
                 for columnkey in columnkeys:
                     originalkey = list(rowkey)
                     originalkey.insert(mapresult.rowkeys.names.index(over_columns),columnkey) # insert the column value at the right level
-                    originalindex = mapresult.rowkeys.get_loc(tuple(originalkey))  
-                    rowlist.append(mapresult.listofarrays[originalindex])
+                    try:
+                        originalindex = mapresult.rowkeys.get_loc(tuple(originalkey))  
+                        rowlist.append(mapresult.listofarrays[originalindex])
+                    except KeyError: # in this case it is an unstack combination that is not present
+                        rowlist.append(None) # Leave the entry empty 
+
                 listofarrays.append(rowlist)
         # Now we can reset
         mapresult.listofarrays = listofarrays
@@ -555,22 +632,41 @@ def mapplot(mapresult: FacetMapResult, wrap_per_row: int = 1, over_columns: str 
 
     nrows = len(mapresult.listofarrays)
     ncols = len(mapresult.listofarrays[0]) 
+    if fancyplot:
+        subplot_kw = dict(projection=ccrs.Mollweide() if (projection is None) else projection) # The desired projection
+        array_crs = ccrs.PlateCarree() # what projection the data is in (regular lat lon grid)
+    else:
+        subplot_kw = dict()
 
-    fig, axes = plt.subplots(nrows = nrows, ncols = ncols, squeeze = False, sharex = True, sharey = True, figsize = (4*ncols,3.5 * nrows))
+    fig, axes = plt.subplots(nrows = nrows, ncols = ncols, squeeze = False, sharex = True, sharey = True, figsize = (4*ncols,3.5 * nrows), subplot_kw = subplot_kw)
     for i, rowlist in enumerate(mapresult.listofarrays):
         for j, array in enumerate(rowlist):
             ax = axes[i,j]
-            armin = array.min()
-            armax = array.max()
-            absmax = max(abs(armin),armax)
-            if armin < 0 and armax > 0: # If positive and negative values are present then we want to center.
-                cmap = plt.get_cmap('RdBu_r')
-                im = ax.pcolormesh(array, vmin = -absmax, vmax = absmax, cmap = cmap) 
-            else:
-                im = ax.pcolormesh(array, vmin = armin, vmax = armax) 
-            cbar = fig.colorbar(im, ax = ax)
-            cbar.set_label(f'{array.name} [{array.units}]')
-            ax.set_title(array._title_for_slice())
+            if not array is None:
+                armin = array.min() if not match_scales else mapresult.minimums.min()
+                armax = array.max() if not match_scales else mapresult.maximums.max()
+                absmax = max(abs(armin),armax)
+                if armin < 0 and armax > 0: # If positive and negative values are present then we want to center the colorscale
+                    kwargs = dict(cmap = plt.get_cmap('RdBu_r'), vmin = -absmax, vmax = absmax)
+                else:
+                    kwargs = dict(vmin = armin, vmax = armax)
+                if not fancyplot:
+                    im = ax.pcolormesh(array,**kwargs) 
+                else:
+                    if not region is None:
+                        extent = np.array(region[1:])[[1,3,2,0]]  # drop the name and reorder to x0,x1,y0,y1 
+                        ax.set_extent(tuple(extent), crs = array_crs)
+                    ax.coastlines()
+                    # Define lats and lons at grid corners for pcolormesh + projection
+                    lats = array.latitude.values # Interpreted as northwest corners (90 is in there)
+                    lons = array.longitude.values # Interpreted as northwest corners (-180 is in there, 180 not)
+                    lats = np.concatenate([lats[[0]] - np.diff(lats)[0], lats], axis = 0) # Adding the sourthern edge 
+                    lons = np.concatenate([lons, lons[[-1]] + np.diff(lons)[0]], axis = 0)# Adding the eastern edge
+                    #im = ax.contourf(array.longitude,array.latitude,array.values, transform = array_crs, **kwargs) #Cannot currently do pcolormesh needs lats and lons at gridcorners 
+                    im = ax.pcolormesh(lons,lats,array.values, shading = 'flat', transform = array_crs, **kwargs) #Cannot currently do pcolormesh needs lats and lons at gridcorners 
+                cbar = fig.colorbar(im, ax = ax)
+                cbar.set_label(f'{array.name} [{array.units}]')
+                ax.set_title(array._title_for_slice())
             if j == 0:
                 ax.set_ylabel(f'{mapresult.rowkeys[i]}')
     return fig, axes
@@ -596,7 +692,7 @@ def barplot(impdf: Union[pd.Series,pd.DataFrame], n_most_important = 10, ignore_
     fig, axes = plt.subplots(nrows = 1, ncols = ncols, squeeze = False, sharex = True, figsize = (4*ncols,4))
 
     for i, col in enumerate(impdf.columns):
-        sorted_by_col = impdf.loc[:,col].sort_values(ascending = False).iloc[:n_most_important]
+        sorted_by_col = impdf.loc[:,col].sort_values(ascending = False).iloc[(n_most_important - 1)::-1]
         ax = axes[0,i]
         ax.barh(range(n_most_important), width = sorted_by_col)
         ax.set_yticks(range(n_most_important))
@@ -628,13 +724,13 @@ def scatterplot(impdata: ImportanceData, selection: pd.DataFrame, alpha = 0.5, q
         train_indexer = ~y_summer.columns.isin(y_summer.loc[:,validation_indexer].columns) # Inverting the slice
         ax.scatter(x = X_summer.loc[:,train_indexer].values.squeeze(), y = y_summer.loc[:,train_indexer].values.squeeze(), alpha = alpha, label = 'train')
         ax.scatter(x = X_summer.loc[:,validation_indexer].values.squeeze(), y = y_summer.loc[:,validation_indexer].values.squeeze(), alpha = alpha, label = 'validation')
-        ax.set_title(f'validation: {validation_indexer.start.strftime("%Y-%m-%d")} - {validation_indexer.stop.strftime("%Y-%m-%d")}')
+        ax.set_title(f'validation: {validation_indexer.start.strftime("%Y-%m-%d")} - {validation_indexer.stop.strftime("%Y-%m-%d")}, imp: {float(np.round(selection.values,3))}')
     else:
         ax.scatter(x = X_summer.values.squeeze(), y = y_summer.values.squeeze(), alpha = alpha, label = 'full')
 
     # Some general annotation
     if not quantile is None:
-        ax.hlines(y = y_summer.quantile(quantile, axis = 1), xmin = X_summer.min(axis = 1), xmax = X_summer.max(axis =1), label = f'q{quantile}') # y was loaded as already detrended
+        ax.hlines(y = y_summer.quantile(quantile, axis = 1), xmin = X_summer.min(axis = 1), xmax = X_summer.max(axis =1), label = f'q{quantile}') # y was loaded as trended or detrended. depening on Hybrid model presence at init of impdata
     ax.legend()
     ax.set_xlabel(f'{X_summer.index[0]}')
     ax.set_ylabel(f'response agg: {y_summer.index[0]}')
@@ -652,7 +748,6 @@ def data_for_shapplot(impdata: ImportanceData, selection: pd.DataFrame, fit_base
     assert isinstance(selection, pd.DataFrame), 'Need columns for this, if only a single timeslice e.g. select with .iloc[:,[100]]'
     respagg = selection.index.get_level_values('respagg').unique() # Potentially passing a pd.Index to get_baserate
     assert len(respagg) == 1, 'A shap plot should contain only the contributions for one response time aggregation' 
-    X_vals = impdata.get_matching_X(selection)
 
     if not fit_base:
         base_value = np.unique(impdata.get_matching(impdata.expvals, selection))
@@ -662,8 +757,16 @@ def data_for_shapplot(impdata: ImportanceData, selection: pd.DataFrame, fit_base
     assert len(base_value) == 1, f'the base_value should be unique, your selection potentially contains multiple folds, or if fit_base={fit_base} the base rate of the hybrid model could change with time'
     returndict = dict(base_value = float(base_value))
 
-    selection, names, dtypes = collapse_restore_multiindex(selection, axis = 0, ignore_level = ['lag'], inplace = False)
-    returndict.update(dict(shap_values = selection.values.T, features = X_vals.values.T, feature_names = selection.index))
+    try:
+        X_vals = impdata.get_matching_X(selection)
+        returndict.update(features = X_vals.values.T)
+    except: # In case e.g. clustid is aggregated out
+        warnings.warn('Could not find X matching the selection, indexes might not correspond, proceed without feature values')
+        returndict.update(features = None)
+
+    lagpresent = 'lag' in selection.index.names 
+    selection, names, dtypes = collapse_restore_multiindex(selection, axis = 0, ignore_level = ['lag'] if lagpresent else None, inplace = False)
+    returndict.update(dict(shap_values = selection.values.T, feature_names = selection.index))
 
     return returndict 
 
@@ -695,5 +798,3 @@ def yplot(impdata: ImportanceData, resp_sep_combinations: List[Tuple[int]] = [(3
     ax.set_ylabel('probability')
     return fig, ax
     
-
-
