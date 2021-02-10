@@ -253,7 +253,7 @@ class ImportanceData(object):
         Series if a single respagg is requested, otherwise pd.DataFrame
         """
         assert isinstance(when, pd.core.indexes.datetimes.DatetimeIndex), 'Datetimeindex needed, Multiindex with a fold level is taken care of when fitting'
-        thresholds = self.y.quantile(axis = 1) # over axis 1 means over the whole timeseries
+        thresholds = self.y.quantile(self.quantile, axis = 1) # over axis 1 means over the whole timeseries
         binaries = pd.DataFrame(self.y.values > thresholds.values[:,np.newaxis], index = thresholds.index, columns = self.y.columns)
         return binaries.loc[self.respagg if respagg is None else respagg, when].T
 

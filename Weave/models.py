@@ -436,7 +436,7 @@ def compute_forest_shaps(model: Callable, X_in, y_in, X_val = None, y_val = None
         Will return a dataframe with the dimensions of X_train or X_val (depending on 'on_validation' argument
         """
         try:
-            if model.greedyfit:
+            if model.greedyfit: # Attribute might not be found for standard sklearn models
                 model.fit(X = X_train, y=y_train, fullX = pd.concat([X_train,X_val], axis = 0), fully = pd.concat([y_train, y_val], axis = 0)) # Order of the concatenation does not matter.
             else:
                 raise AttributeError('greedyfit attribute is False, act as if not found')
@@ -466,10 +466,10 @@ def compute_forest_shaps(model: Callable, X_in, y_in, X_val = None, y_val = None
         # Now we want to add 'expected_value' as another 'variable', Taking a used value (same dtype) as dummy for the other levels
         dummy_index = list(frame.index[0])
         dummy_index[frame.index.names.index('variable')] = 'expected_value'
-        if len(explainer.expected_value) == 1: # Only one expectation value
-            frame.loc[tuple(dummy_index),:] = float(explainer.expected_value)
-        else:
-            frame.loc[tuple(dummy_index),:] = explainer.expected_value # Actually not sure when a whole array is filled with one entry per obs.
+        if isinstance(explainer.expected_value, np.ndarray):
+            if explainer.expected_value.size == 1: # Only one expectation value, we cannot set a frame row with an array of this dimension, so to float
+                explainer.expected_value = float(explainer.expected_value)
+        frame.loc[tuple(dummy_index),:] = explainer.expected_value # Actually not sure when a whole array is filled with one entry per obs.
         return frame 
 
     if (X_val is None) or (y_val is None):
