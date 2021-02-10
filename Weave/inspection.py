@@ -737,7 +737,7 @@ def scatterplot(impdata: ImportanceData, selection: pd.DataFrame, alpha = 0.5, q
 
     return fig, axes
 
-def data_for_shapplot(impdata: ImportanceData, selection: pd.DataFrame, fit_base: bool = False) -> dict:
+def data_for_shapplot(impdata: ImportanceData, selection: pd.DataFrame, base_too: bool = True, fit_base: bool = True) -> dict:
     """
     Function to prepare data for shap.force_plot and shap.summary_plot
     that selects X-vals accompanying the selection
@@ -749,13 +749,16 @@ def data_for_shapplot(impdata: ImportanceData, selection: pd.DataFrame, fit_base
     respagg = selection.index.get_level_values('respagg').unique() # Potentially passing a pd.Index to get_baserate
     assert len(respagg) == 1, 'A shap plot should contain only the contributions for one response time aggregation' 
 
-    if not fit_base:
-        base_value = np.unique(impdata.get_matching(impdata.expvals, selection))
-    else:
-        base_value = np.unique(impdata.get_baserate(when = selection.columns, respagg = respagg))
+    if base_too:
+        if not fit_base:
+            base_value = np.unique(impdata.get_matching(impdata.expvals, selection))
+        else:
+            base_value = np.unique(impdata.get_baserate(when = selection.columns, respagg = respagg))
 
-    assert len(base_value) == 1, f'the base_value should be unique, your selection potentially contains multiple folds, or if fit_base={fit_base} the base rate of the hybrid model could change with time'
-    returndict = dict(base_value = float(base_value))
+        assert len(base_value) == 1, f'the base_value should be unique, your selection potentially contains multiple folds, or if fit_base={fit_base} the base rate of the hybrid model could change with time'
+        returndict = dict(base_value = float(base_value))
+    else:
+        returndict = dict()
 
     try:
         X_vals = impdata.get_matching_X(selection)
