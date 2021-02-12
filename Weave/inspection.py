@@ -379,13 +379,14 @@ class MapInterface(object):
             setattr(self, variable, xr.concat([getattr(self,variable), ds], dim = 'timeagg')) 
             logging.debug(f'{variable} was present, concatenated timeagg {timeagg} to existing')
 
-    def map_to_fields(self, imp: pd.Series, remove_unused: bool = True) -> FacetMapResult:
+    def map_to_fields(self, imp: pd.Series, remove_unused: bool = True, unit: str = '') -> FacetMapResult:
         """
         Mapping a selection of properly indexed importance data to the clustids
         associated to the folds/variables/timeaggs/separations 
         it finds the unique groups. attemps mapping
         respagg does not play any role (not a property of input)
         returns a multiindex for the groups and a list with the filled clustid fields
+        Because imp does not carry its own units (unlike xarray) possible to supply the new unit
         """
         assert 'clustid' in imp.index.names, 'mapping to fields by means of clustid, should be present in index, not be reduced over'
         assert isinstance(imp, pd.Series), 'Needs to be a series (preferably with meaningful name) otherwise indexing will fail'
@@ -393,17 +394,21 @@ class MapInterface(object):
             """ 
             does a single field. for all unique non-nan clustids in the field
             it calls a boolean comparison. Values not belonging are kept 
-            the ones belonging are set to the importance is found in impvals
+            the ones belonging to the clustid are set to the importance is found in impvals
             if not found (and remove_unused) then it is set to nan. So visually clusters can disappear
             The only way this repeated call can go wrong is if 
             the assigned importance has the exact value of a clustid integer called later
+            This corner case can happen with shapvals of 0 and e.g. with the maximum scaled perimps (0 and 1)
+            Therefore the Id's in the repeated call are taken outside the range of any impval
+            by adding 10000
             """
             logging.debug(f'attempt field read and importance mapping for {variable}, fold {fold}, timeagg {timeagg}, separation {separation}')
             fieldfold = self.lookup(fold) 
             clustidmap = self.get_field(fold = fieldfold, variable = variable, timeagg = timeagg, separation = separation, what = 'clustid').copy() # Copy because replacing values. Don't want that to happen to our cached dataset
+            clustidmap = clustidmap + 10000.0 # Dtype was already float32 because of the nans present
             ids_in_map = np.unique(clustidmap) # still nans possible
-            ids_in_map = ids_in_map[~np.isnan(ids_in_map)].astype(int) 
-            ids_in_imp = impvals.index.get_level_values('clustid')
+            ids_in_map = ids_in_map[~np.isnan(ids_in_map)]  
+            ids_in_imp = impvals.index.get_level_values('clustid') + 10000.0 # conversion to float
             assert len(ids_in_imp) <= len(ids_in_map), 'importance series should not have more clustids than are contained in the corresponding map field'
             for clustid in ids_in_map:
                 logging.debug(f'attempting mask for map clustid {clustid}')
@@ -414,6 +419,7 @@ class MapInterface(object):
                 else:
                     pass
             clustidmap.name = impvals.name
+            clustidmap.attrs.update({'units':unit})
             clustidmap.coords.update({'fold':fold}) # Read the fieldfold, now give it the fold numer of the fold it belongs to.
             return clustidmap 
 
