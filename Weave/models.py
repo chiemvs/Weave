@@ -355,7 +355,7 @@ def hyperparam_evaluation(model: Callable, X_in, y_in, hyperparams: dict, other_
     full.columns.names = list(keynames)
     return full
 
-def permute_importance(model: Callable, X_in, y_in, X_val = None, y_val = None, evaluation_fn = mean_absolute_error, scoring_strategy = 'argmax_of_mean', perm_imp_kwargs: dict = dict(nimportant_vars = 8, njobs = -1, nbootstrap = 500), single_only: bool = False, n_folds = 10, split_on_year = True):
+def permute_importance(model: Callable, X_in, y_in, X_val = None, y_val = None, on_validation = True, evaluation_fn = mean_absolute_error, scoring_strategy = 'argmax_of_mean', perm_imp_kwargs: dict = dict(nimportant_vars = 8, njobs = -1, nbootstrap = 500), single_only: bool = False, n_folds = 10, split_on_year = True):
     """
     Calls permutation importance functionality 
     This functionality does single-multi-pass permutation on the validation part of the data
@@ -378,10 +378,16 @@ def permute_importance(model: Callable, X_in, y_in, X_val = None, y_val = None, 
                 raise AttributeError('greedyfit attribute is False, act as if not found')
         except AttributeError:
             model.fit(X = X_train, y=y_train)
-        y_val = y_val.to_frame() # Required form for perm imp
-        _, names, dtypes = collapse_restore_multiindex(X_val, axis = 1, inplace = True) # Collapse of the index is required unfortunately for the column names
+        if on_validation:
+            y_frame = y_val
+            X_frame = X_val
+        else:
+            y_frame = y_train
+            X_frame = X_train
+        y_frame = y_frame.to_frame() # Required form for perm imp
+        _, names, dtypes = collapse_restore_multiindex(X_frame, axis = 1, inplace = True) # Collapse of the index is required unfortunately for the column names
         #result = sklearn_permutation_importance(model = model, scoring_data = (X_val.values, y_val.values), evaluation_fn = evaluation_fn, scoring_strategy = scoring_strategy, variable_names = X_val.columns, **perm_imp_kwargs) # Pass the data as numpy arrays. Avoid bug in PermutationImportance, see scripts/minimum_example.py https://github.com/gelijergensen/PermutationImportance/issues/84
-        result = sklearn_permutation_importance(model = model, scoring_data = (X_val, y_val), evaluation_fn = evaluation_fn, scoring_strategy = scoring_strategy, variable_names = X_val.columns, **perm_imp_kwargs) # Pass the data as numpy arrays. Avoid bug in PermutationImportance, see scripts/minimum_example.py https://github.com/gelijergensen/PermutationImportance/issues/84
+        result = sklearn_permutation_importance(model = model, scoring_data = (X_frame, y_frame), evaluation_fn = evaluation_fn, scoring_strategy = scoring_strategy, variable_names = X_val.columns, **perm_imp_kwargs) # Pass the data as numpy arrays. Avoid bug in PermutationImportance, see scripts/minimum_example.py https://github.com/gelijergensen/PermutationImportance/issues/84
         singlepass = result.retrieve_singlepass()
         singlepass_rank_scores = pd.DataFrame([{'rank':tup[0], 'score':np.mean(tup[1])} for tup in singlepass.values()], index = singlepass.keys()) # We want to export both rank and mean score. (It is allowed to average here over all bootstraps even when this happens in one fold of the cross validation, as the grand mean will be equal as group sizes are equal over all cv-folds)
         _,_,_ = collapse_restore_multiindex(singlepass_rank_scores, axis = 0, names = names, dtypes = dtypes, inplace = True)
