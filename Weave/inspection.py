@@ -706,6 +706,43 @@ def barplot(impdf: Union[pd.Series,pd.DataFrame], n_most_important = 10, ignore_
         ax.set_title(col)
     return fig, axes
 
+def in_out_kept(base: Union[pd.Series,pd.DataFrame], other: Union[pd.Series,pd.DataFrame], n_most_important = 10, ignore_in_names=['respagg', 'lag']):
+    """
+    Function to display which predictors are new in the n_most important
+    of other, compared to base. Also the ones that are kept, and the ones that went out
+    Runs per fold. 
+    """
+    if isinstance(base, pd.Series):
+        base = pd.DataFrame(base) # Just so we can loop over columns
+    if isinstance(other, pd.Series):
+        other = pd.DataFrame(other) # Just so we can loop over columns
+    
+    assert (base.shape == other.shape) and all(base.columns == other.columns) ,'Everything except the values of the datasets need to match, columns and index content, and column-order'
+
+    if base.index.nlevels > 1: # Also dropping on axis = 0 
+        base, oldrownames, dtypes = collapse_restore_multiindex(base, axis = 0, ignore_level = ignore_in_names)
+        other, oldrownames, dtypes = collapse_restore_multiindex(other, axis = 0, ignore_level = ignore_in_names)
+    # Initialize all at the maximum possible size, 
+    # ordering of kept and out index is actually by importance in base
+    # ordering of new index is actually by importance in new
+    indf = pd.DataFrame(None, columns = base.columns, index = pd.RangeIndex(n_most_important, name = 'other_imp'))
+    outdf = pd.DataFrame(None, columns = base.columns, index = pd.RangeIndex(n_most_important, name = 'base_imp'))
+    keptdf = pd.DataFrame(None, columns = base.columns, index = pd.RangeIndex(n_most_important, name = 'base_imp'))
+    for col in base.columns:
+        base_by_col = base.loc[:,col].sort_values(ascending = False).iloc[:(n_most_important - 1)]
+        other_by_col = other.loc[:,col].sort_values(ascending = False).iloc[:(n_most_important - 1)]
+        for place in range(len(base_by_col)):
+            key = base_by_col.index[place]
+            if key in other_by_col.index:
+                keptdf.loc[place,col] = key
+            else:
+                outdf.loc[place,col] = key
+        for place in range(len(other_by_col)):
+            key = other_by_col.index[place]
+            if not key in base_by_col.index:
+                indf.loc[place,col] = key
+
+    return indf.dropna(how = 'all'), outdf.dropna(how = 'all'), keptdf.dropna(how = 'all')
 
 def scatterplot(impdata: ImportanceData, selection: pd.DataFrame, alpha = 0.5, quantile: float = None, ignore_in_names = ['respagg','lag','metric']):
     """
