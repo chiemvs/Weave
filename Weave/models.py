@@ -7,14 +7,136 @@ import numpy as np
 import pandas as pd
 import itertools
 import logging
-import shap
+import warnings
+try:
+    import shap
+except ImportError:
+    pass
 
-from typing import Callable
+from typing import Callable, Union
 from collections import OrderedDict
 from sklearn.model_selection import KFold, GroupKFold
-from sklearn.metrics import mean_squared_error, r2_score, mean_absolute_error, brier_score_loss, log_loss
+from sklearn.metrics import mean_squared_error, r2_score, mean_absolute_error
 from sklearn.ensemble import RandomForestRegressor, RandomForestClassifier
+from sklearn.linear_model import LogisticRegression
+from sklearn.preprocessing import StandardScaler
 from PermutationImportance import sklearn_permutation_importance
+
+from .utils import collapse_restore_multiindex 
+
+class BaseExceedenceModel(LogisticRegression):
+    """
+    Base model for trended binary exceedence response 
+    Modeled with a time-dependent logistic regression (one coefficient)
+    Only the (scaled) time axis of any X input is used
+    """
+    def __init__(self, penalty = 'l2', C = 1.0, fit_intercept = True, *args, **kwargs) -> pd.Series:
+        LogisticRegression.__init__(self, penalty = penalty, C = C, fit_intercept = fit_intercept, *args, **kwargs)
+
+    def __repr__(self):
+        return f'LogisticRegression with scaled time index as only input: penalty={self.penalty}, C={self.C}, fit_intercept={self.fit_intercept}'
+
+    def transform_input(self, X: Union[pd.Series, pd.DataFrame], force: bool = True) -> pd.Series:
+        """
+        Extracting only the time axis from the input
+        Scaling coefficients are estimated on the training data. Scaled it will converge and
+        penalize better
+        """
+        X = X.index.to_julian_date().values[:,np.newaxis]
+        if force: # Recalibrate the scaling coefficients
+            self.scaler = StandardScaler(copy = True, with_mean = True, with_std = True)
+            X = self.scaler.fit_transform(X) # leads to attributes .mean_ and .var_
+        else:
+            assert hasattr(self, 'scaler'), 'Scaling was called from predict but no scaler was present. Call fit first with training data'
+            X = self.scaler.transform(X)
+        return X
+
+    def fit(self, X, y):
+        """
+        Modification of the original fit to fit only on the time-axis of X
+        """
+        LogisticRegression.fit(self = self, X = self.transform_input(X, force = True), y = y)
+        assert len(self.coef_) == 1, 'Only one feature (namely time) should be used in the fitting'
+        if (self.coef_ < 0).any():
+            warnings.warn('BaseExceedenceModel shows a negative dependence on time, so a negative climate change trend. Is your procedure for creating y correct?')
+
+    def predict(self, X) -> np.ndarray: 
+        """
+        Modification of the original predict_proba function
+        Only returning the probability of True. not indexed (this is handled by e.g. fit_predict)
+        """
+        two_class_preds = LogisticRegression.predict_proba(self = self, X = self.transform_input(X, force = False))
+        one_class_preds = two_class_preds[:,self.classes_.tolist().index(True)]
+        return one_class_preds
+
+    def predict_log_proba(self, X) -> np.ndarray:
+        """
+        Modification to return only the log(prob) of the positive class
+        Not indexed
+        """
+        two_class_preds = LogisticRegression.predict_log_proba(self = self, X = self.transform_input(X, force = False))
+        one_class_preds = two_class_preds[:,self.classes_.tolist().index(True)]
+        return one_class_preds
+
+class HybridExceedenceModel(object):
+    """
+    Binary trended response variable (two classes)
+    is tackled with a base model plus a Random Forest
+    The base logistic-regression classifier uses only the time axis (so climate change)
+    to model the changing base rate.
+    Then the response is tranformed by subtracting the base rate 
+    The residual 'probabilistic anomaly' is then treated as a regression problem.
+    """
+    def __init__(self, fit_base_to_all_cv: bool = False, base_only: bool = False, cap_predictions: bool = True, *rfargs, **rfkwargs):
+        """
+        The supplied args and kwargs need to be for the RandomForestRegressor, e.g. hyperparams
+        Flag possible to ask for greedy use of both train and val data for training the base trend model
+        within a cross-validation setting, where these things are automated
+        possible to fit and predict only the base part. Can speed up if only that is desired, but keeping the same model
+        """
+        self.base = BaseExceedenceModel()
+        self.rf = RandomForestRegressor(*rfargs, **rfkwargs)
+        self.greedyfit = fit_base_to_all_cv # Also needed to recognize greedy need at base for algortihms seeing only the hybrid top 
+        self.base.greedyfit = fit_base_to_all_cv
+        self.base_only = base_only
+        self.cap = cap_predictions
+
+    def __repr__(self):
+        return f'Hybrid combination with {self.rf} on top of {self.base}, with greedy base: {self.base.greedyfit}'
+
+    def fit(self, X, y, fullX = None, fully = None):
+        """
+        Fit & predict base rate trend of True in training response data
+        Create new probalistic anomalie response with possible scale: [-1, 1]
+        Full X and full y can be supplied when greedy fit is true (channeled only to base fit func)
+        """
+        if self.base.greedyfit:
+            assert (not fullX is None) and (not fully is None), 'fullX and fully need to be supplied by the crossvalidation if you want the fit_base_to_all option'
+            self.base.fit(X = fullX, y = fully)
+        else:
+            self.base.fit(X = X, y = y)
+        if not self.base_only:
+            baserate = self.base.predict(X = X) # Uses only the time axis of X, predicting the training data
+            probabilistic_anoms = y - baserate # Bool minus numeric 
+            #logloss = -np.log(baserate) * y - np.log(1 - baserate)  * (~y)
+            self.rf.fit(X = X, y = probabilistic_anoms)
+
+    def predict(self, X) -> np.ndarray:
+        """
+        Inherently a probabilistic prediction like predict_proba, but only the single 'True' class
+        Because of this the loss (and permutation importance can still be evaluated with e.g. brier score
+        Predictions need be clipped to [0, 1]
+        """
+        baserate = self.base.predict(X) # Predicting with fitted baserate model 
+        if self.base_only:
+            return baserate
+        else:
+            probabilistic_anoms = self.rf.predict(X = X)  # [-1 to 1]
+            predictions = baserate + probabilistic_anoms # stays a numpy ndarray, necessary for comparibility with permutation importance. 
+            if self.cap:
+                predictions[predictions < 0] = 0
+                predictions[predictions > 1] = 1
+            return predictions 
 
 def evaluate(data = None, y_true = None, y_pred = None, scores = [r2_score, mean_squared_error, mean_absolute_error], score_names = ['r2','mse','mae']) -> pd.Series:
     """
@@ -35,15 +157,17 @@ def evaluate(data = None, y_true = None, y_pred = None, scores = [r2_score, mean
         returns.loc[name] = score(y_true, y_pred)
     return returns
 
-def crossvalidate(n_folds: int = 10, split_on_year: bool = False) -> Callable:
+def crossvalidate(n_folds: int = 10, split_on_year: bool = False, sort: bool = True) -> Callable:
     def actual_decorator(func: Callable) -> Callable:
         """
         Manipulates the input arguments of func
         X_in and y_in are distributed over X_train, y_train, X_val, y_val
         func should be a function that returns pandas objects
-        TODO: remove debugging print statements
         possibility to split cleanly on years. Years are grouped into distinct consecutive groups, such that the amount of groups equals the disered amount of folds.
-        With split on year there is no guarantee of the folds [0 to nfolds-1] to be chronological on the time axis. Therefore a sorting of time index is needed.
+        With split on year there is no guarantee of the folds [0 to nfolds-1] to be chronological on the time axis. Therefore a sorting of time index is needed and can be asked.
+        Also it can be that X_in carries crossvalidated information (column index level with fold indices)
+        In that case the selection of a row fold is accompanied by selection of the correct set of columns
+        You have to make sure yourself that the k-th indices match, with split on year they are not neccesarily chronological
         """
         def wrapper(*args, **kwargs) -> pd.Series:
             try:
@@ -63,21 +187,38 @@ def crossvalidate(n_folds: int = 10, split_on_year: bool = False) -> Callable:
             else:
                 kf = KFold(n_splits = n_folds)
                 kf_kwargs = dict(X = X_in)
+            try:
+                fold_in_columns = 'fold' in X_in.columns.names # Will fail if numpy or pd.Series
+                if fold_in_columns:
+                    assert len(np.unique(X_in.columns.get_level_values('fold'))) == n_folds, f'fold level present in columns, but its k unique values should equal current n_folds {n_folds}'
+                    assert X_in.columns.names.index('fold') == 0, 'fold level present in columns, but make sure it is the zeroth (topmost) level'
+                    logging.debug('Fold level present in columns, row subsetting will be accompanied by column subsetting')
+            except AttributeError:
+                fold_in_columns = False
             results = []
             k = 0
             for train_index, val_index in kf.split(**kf_kwargs): # This generates integer indices, ultimately pure numpy and slices would give views. No copy of data, better for distributed
-                if isinstance(X_in, pd.DataFrame):
-                    X_train, X_val = X_in.iloc[train_index,:], X_in.iloc[val_index]
+                if isinstance(X_in, (pd.Series,pd.DataFrame)):
+                    if fold_in_columns:
+                        X_train, X_val = X_in.iloc[train_index, X_in.columns.get_loc(k)], X_in.iloc[val_index, X_in.columns.get_loc(k)]
+                    else:
+                        X_train, X_val = X_in.iloc[train_index], X_in.iloc[val_index]
                     y_train, y_val = y_in.iloc[train_index], y_in.iloc[val_index]
                 else:
                     X_train, X_val = X_in[train_index,:], X_in[val_index,:]
-                    y_train, y_val = y_in[train_index], y_in[val_index]
+                    y_train, y_val = y_in[train_index,...], y_in[val_index,...] # 1D, but possibly 2D
                 kwargs.update({'X_train':X_train, 'y_train':y_train, 'X_val':X_val, 'y_val':y_val})
-                logging.debug(f'fold {k}, kwargs: {kwargs.keys()}, args: {args}')
                 k += 1
                 results.append(func(*args, **kwargs))
-            results = pd.concat(results, axis = 0, keys = pd.RangeIndex(n_folds, name = 'fold')) 
-            if split_on_year:
+            results = pd.concat(results, axis = 0, keys = pd.RangeIndex(n_folds, name = 'fold'), join = 'outer') # Outer handling of the non-concatenation axis. For the case with cross-validated input this can result in a double fold axis. Therefore check if double (and equal) below
+            if results.index.names.count('fold') == 2:
+                level_nrs = np.where(np.array(results.index.names) == 'fold')[0]
+                try:
+                    assert np.equal(results.index.get_level_values(level_nrs[0]),results.index.get_level_values(level_nrs[1])).all()
+                    results.index = results.index.droplevel(level_nrs[0])
+                except AssertionError:
+                    warnings.warn('concatenation after cross validation resulted in two fold index levels that are unequal. Will not remove them')
+            if split_on_year and sort:
                 return(results.sort_index(axis = 0, level = -1)) # Lowest level perhaps called time, highest level in the hierarchy has just become fold,
             else:
                 return(results)
@@ -127,7 +268,13 @@ def fit_predict_evaluate(model: Callable, X_in, y_in, X_val = None, y_val = None
     def inner_func(model, X_train, y_train, X_val, y_val) -> pd.Series:
         if not balance_training is None:
             X_train, y_train = balance_training_data(how = balance_training, X_train = X_train, y_train = y_train)
-        model.fit(X = X_train, y=y_train)
+        try:
+            if model.greedyfit:
+                model.fit(X = X_train, y=y_train, fullX = pd.concat([X_train,X_val], axis = 0), fully = pd.concat([y_train, y_val], axis = 0)) # Order of the concatenation does not matter.
+            else:
+                raise AttributeError('greedyfit attribute is False, act as if not found')
+        except AttributeError:
+            model.fit(X = X_train, y=y_train)
         preds = model.predfunc(X = X_val)
         scores = evaluate(y_true = y_val, y_pred = preds, **evaluate_kwds) # Unseen data
         if compare_val_train:
@@ -164,7 +311,13 @@ def fit_predict(model: Callable, X_in, y_in, X_val = None, y_val = None, n_folds
     def inner_func(model, X_train, y_train, X_val, y_val) -> pd.Series:
         if not balance_training is None:
             X_train, y_train = balance_training_data(how = balance_training, X_train = X_train, y_train = y_train)
-        model.fit(X = X_train, y=y_train)
+        try:
+            if model.greedyfit:
+                model.fit(X = X_train, y=y_train, fullX = pd.concat([X_train,X_val], axis = 0), fully = pd.concat([y_train, y_val], axis = 0)) # Order of the concatenation does not matter.
+            else:
+                raise AttributeError('greedyfit attribute is False, act as if not found')
+        except AttributeError:
+            model.fit(X = X_train, y=y_train)
         preds = model.predfunc(X = X_val)
         return pd.Series(preds, index = y_val.index)
 
@@ -202,7 +355,7 @@ def hyperparam_evaluation(model: Callable, X_in, y_in, hyperparams: dict, other_
     full.columns.names = list(keynames)
     return full
 
-def permute_importance(model: Callable, X_in, y_in, X_val = None, y_val = None, evaluation_fn = mean_absolute_error, scoring_strategy = 'argmax_of_mean', perm_imp_kwargs: dict = dict(nimportant_vars = 8, njobs = -1, nbootstrap = 500), single_only: bool = False, n_folds = 10, split_on_year = True):
+def permute_importance(model: Callable, X_in, y_in, X_val = None, y_val = None, on_validation = True, evaluation_fn = mean_absolute_error, scoring_strategy = 'argmax_of_mean', perm_imp_kwargs: dict = dict(nimportant_vars = 8, njobs = -1, nbootstrap = 500), single_only: bool = False, n_folds = 10, split_on_year = True):
     """
     Calls permutation importance functionality 
     This functionality does single-multi-pass permutation on the validation part of the data
@@ -210,28 +363,43 @@ def permute_importance(model: Callable, X_in, y_in, X_val = None, y_val = None, 
     If only X_in and y_in are supplied, then data is intepreted as the complete validation/training set
     on which cross validation is called.
     perm_imp_kwargs are mainly computational arguments
+    unlike shapley values, permutation importance is computed on the validation folds always
     """
+    logging.debug(f'PermImp will be started on validation, scoring by {evaluation_fn} with {scoring_strategy} as most important')
     if single_only:
         perm_imp_kwargs['nimportant_vars'] = 1 # Only one pass neccessary
 
     # Use similar setup as fit_predict_evaluate, with an inner_func that is potentially called multiple times
     def inner_func(model, X_train, y_train, X_val: pd.DataFrame, y_val: pd.Series) -> pd.DataFrame:
-        model.fit(X = X_train, y = y_train)
-        y_val = y_val.to_frame() # Required form for perm imp
-        X_val.columns = ['.'.join([str(c) for c in col]) for col in X_val.columns.values] # Collapse of the index is required unfortunately
-        result = sklearn_permutation_importance(model = model, scoring_data = (X_val.values, y_val.values), evaluation_fn = evaluation_fn, scoring_strategy = scoring_strategy, variable_names = X_val.columns, **perm_imp_kwargs) # Pass the data as numpy arrays. Avoid bug in PermutationImportance, see scripts/minimum_example.py
+        try:
+            if model.greedyfit:
+                model.fit(X = X_train, y=y_train, fullX = pd.concat([X_train,X_val], axis = 0), fully = pd.concat([y_train, y_val], axis = 0)) # Order of the concatenation does not matter.
+            else:
+                raise AttributeError('greedyfit attribute is False, act as if not found')
+        except AttributeError:
+            model.fit(X = X_train, y=y_train)
+        if on_validation:
+            y_frame = y_val
+            X_frame = X_val
+        else:
+            y_frame = y_train
+            X_frame = X_train
+        y_frame = y_frame.to_frame() # Required form for perm imp
+        _, names, dtypes = collapse_restore_multiindex(X_frame, axis = 1, inplace = True) # Collapse of the index is required unfortunately for the column names
+        #result = sklearn_permutation_importance(model = model, scoring_data = (X_val.values, y_val.values), evaluation_fn = evaluation_fn, scoring_strategy = scoring_strategy, variable_names = X_val.columns, **perm_imp_kwargs) # Pass the data as numpy arrays. Avoid bug in PermutationImportance, see scripts/minimum_example.py https://github.com/gelijergensen/PermutationImportance/issues/84
+        result = sklearn_permutation_importance(model = model, scoring_data = (X_frame, y_frame), evaluation_fn = evaluation_fn, scoring_strategy = scoring_strategy, variable_names = X_frame.columns, **perm_imp_kwargs) # Pass the data as numpy arrays. Avoid bug in PermutationImportance, see scripts/minimum_example.py https://github.com/gelijergensen/PermutationImportance/issues/84
         singlepass = result.retrieve_singlepass()
-        singlepass_rank_scores = pd.DataFrame([{'rank':tup[0], 'score':np.mean(tup[1])} for tup in singlepass.values()]) # We want to export both rank and mean score. (It is allowed to average here over all bootstraps even when this happens in one fold of the cross validation, as the grand mean will be equal as group sizes are equal over all cv-folds)
-        singlepass_rank_scores.index = pd.MultiIndex.from_tuples([tuple(string.split('.')) for string in singlepass.keys()], names = X_train.columns.names)
+        singlepass_rank_scores = pd.DataFrame([{'rank':tup[0], 'score':np.mean(tup[1])} for tup in singlepass.values()], index = singlepass.keys()) # We want to export both rank and mean score. (It is allowed to average here over all bootstraps even when this happens in one fold of the cross validation, as the grand mean will be equal as group sizes are equal over all cv-folds)
+        _,_,_ = collapse_restore_multiindex(singlepass_rank_scores, axis = 0, names = names, dtypes = dtypes, inplace = True)
         if single_only:
             return singlepass_rank_scores
         else: # Multipass dataframe probably contains the scores and ranks of only a subset of nimportant_vars variables, nrows is smaller than singlepass
             multipass = result.retrieve_multipass()
-            multipass_rank_scores = pd.DataFrame([{'rank':tup[0], 'score':np.mean(tup[1])} for tup in multipass.values()])
-            multipass_rank_scores.index = pd.MultiIndex.from_tuples([tuple(string.split('.')) for string in multipass.keys()], names = X_train.columns.names)
+            multipass_rank_scores = pd.DataFrame([{'rank':tup[0], 'score':np.mean(tup[1])} for tup in multipass.values()], index = multipass.keys())
+            _,_,_ = collapse_restore_multiindex(multipass_rank_scores, axis = 0, names = names, dtypes = dtypes, inplace = True)
             multipass_rank_scores.columns = pd.MultiIndex.from_product([['multipass'], multipass_rank_scores.columns])# Add levels for the merging
             singlepass_rank_scores.columns = pd.MultiIndex.from_product([['singlepass'], singlepass_rank_scores.columns])# Add levels for the merging
-            return singlepass_rank_scores.join(multipass_rank_scores, how = 'left') # Index based merge
+            return singlepass_rank_scores.join(multipass_rank_scores, how = 'left') # Index based merge where singlepass has the most unlass n_important vars is set to full length. 
 
     if (X_val is None) or (y_val is None):
         f = crossvalidate(n_folds = n_folds, split_on_year = split_on_year)(inner_func)
@@ -239,64 +407,75 @@ def permute_importance(model: Callable, X_in, y_in, X_val = None, y_val = None, 
     else:
         return inner_func(model = model, X_train = X_in, y_train = y_in, X_val = X_val, y_val = y_val) 
 
-def get_forest_properties(forest: RandomForestRegressor, average: bool = True):
+def get_forest_properties(forest: Union[RandomForestRegressor,RandomForestClassifier], average: bool = True):
     """
     needs a fitted forest, extracts properties of the decision tree estimators
     the amount of split nodes is always n_leaves - 1
-    flatness is derived by the ratio of the actual amount of n_leaves over n_leaves_for_a_flat_tree_of_that_max_depth (2**maxdepth) (actual leaves usually less when branching of mostly in one direction).
     """
     properties = ['max_depth','node_count','n_leaves']
-    #derived_property = ['flatness']
-    derived_property = []
-    counts = np.zeros((forest.n_estimators, len(properties + derived_property)), dtype = np.int64)
+    counts = np.zeros((forest.n_estimators, len(properties)), dtype = np.int64)
     for i, tree in enumerate(forest.estimators_):
         counts[i,:len(properties)] = [getattr(tree.tree_, name) for name in properties]
     
-    # Derive the other
-    #counts[:,-1] = counts[:,properties.index('n_leaves')] / 2**counts[:,properties.index('max_depth')]
-
     if not average:
-        return pd.DataFrame(counts, index = pd.RangeIndex(forest.n_estimators, name = 'tree'), columns = properties + derived_property)
+        return pd.DataFrame(counts, index = pd.RangeIndex(forest.n_estimators, name = 'tree'), columns = properties)
     else:
-        return pd.Series(counts.mean(axis = 0), index = pd.Index(properties + derived_property, name = 'properties'))
+        return pd.Series(counts.mean(axis = 0), index = pd.Index(properties, name = 'properties'))
 
-def compute_forest_shaps(model: Callable, X_in, y_in, X_val = None, y_val = None, on_validation = True, bg_from_training = True, sample = 'standard', n_folds = 10, split_on_year = True, explainer_kwargs = dict()) -> pd.DataFrame:
+def compute_forest_shaps(model: Callable, X_in, y_in, X_val = None, y_val = None, on_validation = True, use_background = True, bg_from_training = True, sample_background = 'standard', n_folds = 10, split_on_year = True, explainer_kwargs = dict(), shap_kwargs = dict(check_additivity = True)) -> pd.DataFrame:
     """
     Computation of (non-interaction) SHAP values through shap.TreeExplainer. Outputs a frame of shap values with same dimensions as X
-    A non-fitted forest (classifier or regressor), options to get the background data from the training or the validation
+    A non-fitted forest (classifier or regressor), potentially inside a hybrid model, options to get the background data from the training or the validation, or not use background at all
     the sampling of the background can for instance be without balancing, but also in the case of classification
-    with only positives or negatives
+    with only negatives (what makes the exceedence differ from a case where there are no exceedences) but with changing base probability this not advised 
+    Additionally with 'correlation' the background can be constructed with a masker doing grouped masking
     other explainer kwargs are for instance a possible link function, or model_output
+    shap kwargs are for instance check_additivity
     Cross-validation if X_val and y_val are not supplied
     """
-    assert sample in ['standard','negative','positive']
+    assert sample_background in ['standard','negative','correlation']
     max_samples = 500
-    logging.debug(f'TreeShap will be started for {"validation" if on_validation else "training"}, with background data from {"validation" if not bg_from_training else "training"}, event sampling is {sample}')
+    logging.debug(f'TreeShap will be started for {"validation" if on_validation else "training"}, using background data = {use_background}, sampled from {"validation" if not bg_from_training else "training"}, event sampling is {sample_background}')
     # Use similar setup as fit_predict_evaluate, with an inner_func that is potentially called multiple times
     def inner_func(model, X_train, y_train, X_val: pd.DataFrame, y_val: pd.Series) -> pd.DataFrame:
         """
         Will return a dataframe with the dimensions of X_train or X_val (depending on 'on_validation' argument
         """
-        model.fit(X = X_train, y = y_train)
+        try:
+            if model.greedyfit: # Attribute might not be found for standard sklearn models
+                model.fit(X = X_train, y=y_train, fullX = pd.concat([X_train,X_val], axis = 0), fully = pd.concat([y_train, y_val], axis = 0)) # Order of the concatenation does not matter.
+            else:
+                raise AttributeError('greedyfit attribute is False, act as if not found')
+        except AttributeError:
+            model.fit(X = X_train, y=y_train)
         if bg_from_training:
             X_bg_set, y_bg_set = X_train, y_train
         else:
             X_bg_set, y_bg_set = X_val, y_val
-        if sample == 'standard':
+        if sample_background == 'standard':
             background = shap.maskers.Independent(X_bg_set, max_samples = max_samples)
-        elif sample == 'negative':
+        elif sample_background == 'negative':
             background = shap.maskers.Independent(X_bg_set.loc[~y_bg_set,:], max_samples = max_samples)
         else:
-            background = shap.maskers.Independent(X_bg_set.loc[y_bg_set,:], max_samples = max_samples)
-        
-        explainer = shap.TreeExplainer(model = model, data = background, feature_perturbation = 'interventional', **explainer_kwargs)
+            background = shap.maskers.Partition(X_bg_set.loc[y_bg_set,:], max_samples = max_samples, clustering = 'correlation')
+       
+        if isinstance(model, HybridExceedenceModel): # In this case we interpret the regressor in probability space, not the logistic base rate model for climate change beneath it.
+            explainer = shap.TreeExplainer(model = model.rf, data = background if use_background else None, **explainer_kwargs) # feature perturbation is by default interventional when data is not None, else 'tree_path_dependent'
+        else:
+            explainer = shap.TreeExplainer(model = model, data = background if use_background else None, **explainer_kwargs)
 
-        shap_values = explainer.shap_values(X_val if on_validation else X_train) # slow. Outputs a numpy ndarray or a list of them when classifying. We need to add columns and indices
+        shap_values = explainer.shap_values(X_val if on_validation else X_train, **shap_kwargs) # slow. Outputs a numpy ndarray or a list of them when classifying. We need to add columns and indices
         if isinstance(model, RandomForestClassifier):
             shap_values = shap_values[model.classes_.tolist().index(True)] # Only the probabilities for the positive case
-            explainer.expected_value = explainer.expected_value[model.classes_.tolist().index(True)] # Base probability / frequency (potentially through a link function) according to the background data. This plus the average shap sum should add up to the climatological probability
-        frame = pd.DataFrame(shap_values, columns = X_val.columns if on_validation else X_train.columns, index = X_val.index if on_validation else X_train.index)
-        frame['expected_value'] = explainer.expected_value # Will have '' for all, except the zeroth, level of the column multiindex
+            explainer.expected_value = explainer.expected_value[model.classes_.tolist().index(True)] # Base probability / frequency (potentially through a link function) according to the background data (or path dependence). This plus the average shap sum should add up to the climatological probability
+        frame = pd.DataFrame(shap_values.T, columns = X_val.index if on_validation else X_train.index, index = X_val.columns if on_validation else X_train.columns) # Transpose because we want to match the format of permutation importance
+        # Now we want to add 'expected_value' as another 'variable', Taking a used value (same dtype) as dummy for the other levels
+        dummy_index = list(frame.index[0])
+        dummy_index[frame.index.names.index('variable')] = 'expected_value'
+        if isinstance(explainer.expected_value, np.ndarray):
+            if explainer.expected_value.size == 1: # Only one expectation value, we cannot set a frame row with an array of this dimension, so to float
+                explainer.expected_value = float(explainer.expected_value)
+        frame.loc[tuple(dummy_index),:] = explainer.expected_value # Actually not sure when a whole array is filled with one entry per obs.
         return frame 
 
     if (X_val is None) or (y_val is None):
@@ -305,54 +484,35 @@ def compute_forest_shaps(model: Callable, X_in, y_in, X_val = None, y_val = None
     else:
         return inner_func(model = model, X_train = X_in, y_train = y_in, X_val = X_val, y_val = y_val) 
 
-if __name__ == '__main__':
-    from scipy.signal import detrend
-    Y_path = '/nobackup_1/users/straaten/spatcov/response.multiagg.trended.parquet'
-    X_path = '/nobackup_1/users/straaten/spatcov/precursor.multiagg.parquet'
-    #Y_path = '/scistor/ivm/jsn295/clustertest_roll_spearman_varalpha/response.multiagg.trended.parquet'
-    #X_path = '/scistor/ivm/jsn295/clustertest_roll_spearman_varalpha/precursor.multiagg.parquet'
-    #Y_path = '/scistor/ivm/jsn295/clusterpar3_roll_spearman_varalpha/response.multiagg.trended.parquet'
-    #X_path = '/scistor/ivm/jsn295/clusterpar3_roll_spearman_varalpha/precursor.multiagg.parquet'
-    y = pd.read_parquet(Y_path).loc[:,(slice(None),7,slice(None))].iloc[:,0] # Only summer
-    X = pd.read_parquet(X_path).loc[y.index, (slice(None),slice(None),slice(None),-21,slice(None),'spatcov')].dropna(axis = 0, how = 'any')
-    #X = X.sort_index(axis = 1).loc[:,(slice(None),slice(21,22))] # Small subset fit test
-    y = y.reindex(X.index)
-    y = pd.Series(detrend(y), index = y.index, name = y.name) # Also here you see that detrending improves Random forest performance a bit
-    y = y > y.quantile(0.8)
+def get_validation_fold_time(X_train, y_train, X_val: pd.DataFrame, y_val: Union[pd.Series, pd.DataFrame], end_too: bool = False) -> pd.Series:
+    """
+    Small util to get the first timestamp of the validation fold 
+    belonging to the k-th index of the k-fold crossvalidation
+    option to return the end too
+    Useful for split_on_year because the ordering in time can get permuted
+    f = crossvalidate(k,bool,bool)(get_validation_fold_time)
+    f(X_in,y_in)
+    """
+    timeindex = y_val.index[[0]]
+    if not end_too:
+        return pd.Series(timeindex, index = timeindex, name = 'valstart') # Also in index for automatic sorting in crossvalidate
+    else:
+        endindex = y_val.index[-1]
+        return pd.DataFrame([[timeindex[0],endindex]], index = timeindex, columns = ['valstart','valend'])
 
-    # Testing cross validation split on_year vs not on_year
-    # Validation folds should be distinc years
-    #def test_func(model, X_train, y_train, X_val, y_val):
-    #    print('trainslice:', y_train.index.min(), y_train.index.max())
-    #    print('valslice:', y_val.index.min(), y_val.index.max())
-    #    return pd.Series(dtype = np.int32)
-    #
-    #f1 = crossvalidate(n_folds = 5, split_on_year = False)(test_func)
-    #f1(model = None, X_in = X, y_in = y)
-    #f2 = crossvalidate(n_folds = 5, split_on_year = True)(test_func)
-    #f2(model = None, X_in = X, y_in = y)
+def map_foldindex_to_groupedorder(X: pd.DataFrame, n_folds: int, return_foldorder: bool = False) -> None:
+    """
+    Mapping the chronological validation fold index (clusters are stored that way) to the foldorder
+    as defined by the grouped k-fold cross validation
+    Make sure the timeseries in X are completely clipped in time
+    Performed inplace
+    Option to return an intermediate product (namely beginning of the slices, indexed by newfold, and with the sorted oldfold also)
+    """
+    f = crossvalidate(n_folds, True, True)(get_validation_fold_time) # sorting needs to be activated because then we how the indices line up chronologically
+    foldorder = f(X_in = X, y_in = X, end_too = return_foldorder) # Extracting extra info if we want the intermediate product, creates a dataframe instead of a series
+    index_to_order = pd.Series(foldorder.index.droplevel('time'), index = pd.RangeIndex(len(foldorder)))
+    X.columns.set_levels(index_to_order, level = X.columns.names.index('fold'), inplace = True)
+    if return_foldorder:
+        foldorder.index = foldorder.index.droplevel('time')
+        return foldorder.assign(fieldfold = range(n_folds)) 
 
-    # Testing a classifier
-    r2 = RandomForestClassifier(max_depth = 5, n_estimators = 1500, min_samples_split = 20, max_features = 0.15, n_jobs = 7) # Balanced class weight helps a lot.
-    shappies = compute_forest_shaps(r2, X, y, on_validation = True, bg_from_training = True, sample = 'standard', n_folds = 3, split_on_year = True)
-    #test = fit_predict(r2, X, y, n_folds = 5) # evaluate_kwds = dict(scores = [brier_score_loss,log_loss], score_names = ['bs','ll'])
-    #test.index = test.index.droplevel(0)
-    #data = np.stack([y.values,test.values], axis = -1)
-    #from utils import bootstrap, brier_score_clim 
-    #f = bootstrap(5000, return_numeric = True, quantile = [0.05,0.5,0.95])(evaluate)
-    #f2 = bootstrap(5000, blocksize = 15, return_numeric = True, quantile = [0.05,0.5,0.95])(evaluate) # object dtype array
-    #evaluate_kwds = dict(scores = [brier_score_loss], score_names = ['bs'])
-    #ret = f(data, **evaluate_kwds)
-    #ret2 = f2(data, **evaluate_kwds)
-    
-    #hyperparams = dict(min_samples_split = [30,35], max_depth = [15,17,20,23])
-    #hyperparams = dict(min_impurity_decrease = [0.001,0.002,0.003,0.005,0.01])
-    #hyperparams = dict(max_features = [0.05,0.1,0.15,0.2,0.25])
-    #other_kwds = dict(n_jobs = 20, n_estimators = 1000, max_features = 0.2) 
-    #ret = hyperparam_evaluation(RandomForestRegressor, X, y, hyperparams, other_kwds,  fit_predict_evaluate_kwds = dict(properties_too = True))
-    
-    #def wrapper(self, *args, **kwargs):
-    #    return self.predict_proba(*args,**kwargs)[:,-1] # Last class is True
-    #RandomForestClassifier.predict = wrapper # To avoid things inside permutation importance package  
-    #m = RandomForestClassifier(max_depth = 5, min_samples_split = 20, n_jobs = 20, max_features = 0.15, n_estimators = 1500)
-    #ret = permute_importance(m, X_in = X, y_in = y, n_folds = 5, evaluation_fn = brier_score_loss, perm_imp_kwargs = dict(nimportant_vars = None, njobs = 20, nbootstrap = 1500))

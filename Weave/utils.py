@@ -9,7 +9,10 @@ import numpy as np
 import xarray as xr
 import pandas as pd
 import ctypes as ct
-import matplotlib.pyplot as plt
+try:
+    import matplotlib.pyplot as plt
+except ImportError:
+    pass
 from collections import namedtuple
 from typing import Union, Callable, Tuple
 from scipy.stats import rankdata, spearmanr, pearsonr, weightedtau, t
@@ -90,6 +93,9 @@ def nanquantile(array: np.ndarray, q: float) -> np.ndarray:
     floor_val = _zvalue_from_index(arr=array, ind=f_arr) * (c_arr - k_arr)
     ceil_val = _zvalue_from_index(arr=array, ind=c_arr) * (k_arr - f_arr)
 
+    floor_val = _zvalue_from_index(arr=array, ind=f_arr) * (c_arr - k_arr)
+    ceil_val = _zvalue_from_index(arr=array, ind=c_arr) * (k_arr - f_arr)
+
     quant_arr = floor_val + ceil_val
     quant_arr[fc_equal_k_mask] = _zvalue_from_index(arr=array, ind=k_arr.astype(np.int32))[fc_equal_k_mask]  # if floor == ceiling take floor value
 
@@ -116,11 +122,11 @@ def _zvalue_from_index(arr: np.ndarray, ind: np.ndarray) -> np.ndarray:
         
     return(np.take(arr, idx))
 
-def collapse_restore_multiindex(df: Union[pd.DataFrame,pd.Series], axis: int, names: list = None, ignore_level: int = None, separator: str = '.', inplace: bool = False) -> list:
+def collapse_restore_multiindex(df: Union[pd.DataFrame,pd.Series], axis: int, names: list = None, dtypes: list = None, ignore_level: int = None, separator: str = '.', inplace: bool = False) -> list:
     """
-    Used to collapse a pandas multi_index, for instance for the use case where a plotting procedure requires single level understandable column names 
+    Used to collapse a pandas multi_index into string, for instance for the use case where a plotting procedure requires single level understandable column names 
     Ignore_level only used when collapsing, by calling droplevel, so could also be a string according to the pandas api
-    Returns a list with the old column names, if not inplace also the new frame
+    Returns a list with the old column names, the old dtypes, if not inplace also the new frame
     """
     assert (axis == 0) or (axis == 1), "can collapse/restore either the index or the columns, choose axis 0 or 1"
     if axis == 0:
@@ -132,16 +138,20 @@ def collapse_restore_multiindex(df: Union[pd.DataFrame,pd.Series], axis: int, na
         if not ignore_level is None:
             index = index.droplevel(ignore_level)               
         names = index.names.copy()
+        dtypes = [index.levels[i].dtype for i in range(index.nlevels)]
         index = pd.Index([separator.join([str(c) for c in col]) for col in index.values], dtype = object, name = 'collapsed')
-    else: # In this case we are going to restore from string, new levels will all be string dtype
+    else: # In this case we are going to restore from string, new levels will all be string dtype unless dtypes are supplied
         index = pd.MultiIndex.from_tuples([tuple(string.split(separator)) for string in index.values], names = names)
+        if not dtypes is None: # Restoration
+            for i, dtype in enumerate(dtypes):
+                index.set_levels(index.levels[i].astype(dtype), level = i, inplace = True) # inplace here only affects the just created restoration index, not the df itself
     if inplace:
         setattr(df, what, index)
-        return(None, names)
+        return(None, names, dtypes)
     else:
         df = df.copy()
         setattr(df, what, index)
-        return(df, names)
+        return(df, names, dtypes)
 
 def agg_time(array: xr.DataArray, ndayagg: int = 1, method: str = 'mean', firstday: pd.Timestamp = None, rolling: bool = False) -> xr.DataArray:
     """
@@ -151,6 +161,8 @@ def agg_time(array: xr.DataArray, ndayagg: int = 1, method: str = 'mean', firstd
     Trailing Nan's are removed.
     """
     assert (np.diff(array.time) == np.timedelta64(1,'D')).all(), "time axis should be a continuous daily to be aggregated, though nan is allowed"
+    if not firstday is None:
+        array = array.sel(time = slice(firstday, None))
     if rolling:
         name = array.name
         attrs = array.attrs
@@ -160,7 +172,6 @@ def agg_time(array: xr.DataArray, ndayagg: int = 1, method: str = 'mean', firstd
         array.name = name
         array.attrs = attrs
     else:
-        array = array.sel(time = slice(firstday, None))
         input_length = len(array.time)
         f = getattr(array.resample(time = str(ndayagg) + 'D', closed = 'left', label = 'left'), method)
         array = f(dim = 'time', keep_attrs = True, skipna = False)
@@ -194,7 +205,7 @@ def kendall_predictand(data: np.ndarray) -> float:
     Takes in two timeseries in a 2D array (n_obs,[x,y]). computes weighted kendall tau.
     Weights are determined by the y (done by rank is None, meaning that weighting is determined by x)
     (rank = True, would compute twice, once with x and second with y)
-    Significance is not implemented but might be obtained by bootstrapping
+    Significance is not implemented but might be obtained by the bootstrap decorator
     """
     corr, _ = weightedtau(x = data[:,1], y = data[:,0], rank = None)
     return corr
@@ -206,22 +217,57 @@ def quick_kendall(data: np.ndarray) -> tuple:
     corr, pval = weightedtau(x = data[:,1], y = data[:,0], rank = None)
     return (corr, 1e-9)
 
-def pearsonr_wrap(data: np.ndarray) -> tuple:
+def prepare_scipy_stats_for_array(func: Callable):
     """
-    wraps scipy pearsonr by decomposing a 2D dataarray (n_obs,[x,y]) into x and y
+    Decorator
+    wraps 2D array input to two 1D arrays. Should be used if you want to apply my bootstrap procedure (requiring a single 2d dataarray) to a scipy stats stats function like pearsonr 
+    Because we bootstrap we want to retain only the corr, not the pval
     """
-    return pearsonr(x = data[:,0], y = data[:,1]) 
+    def decorated_func(*args,**kwargs):
+        """
+        Bootstrap supplies data as first argument
+        """
+        return func(args[0][:,0], args[0][:,1], *args[1:], **kwargs)[0]
+    return decorated_func
 
-def spearmanr_wrap(data: np.ndarray) -> tuple:
+
+def prepare_scipy_stats_for_crossval(func) -> Callable:
     """
-    wraps scipy pearsonr by decomposing a 2D dataarray (n_obs,[x,y]) into x and y
+    Decorator to ready a scipy stats function (returning (cor,pval) tuple) 
+    for crossvalidation. This means readying it to accept 4 dataframe/array arguments
+    Then compute only on the training data, and return a pandas dataframe (such that crossvalidation can piece the ones of different folds together)
+    The returned function should again afterwards be decorated with crossvalidate, and after that be called with X_in and y_in kwargs
     """
-    return spearmanr(a = data[:,0], b = data[:,1]) 
+    def compatible_with_crossval(X_train, y_train, X_val, y_val = None) -> pd.Series: 
+        if isinstance(X_val, pd.DataFrame):
+            return pd.DataFrame([func(X_train, y_train)], columns = ['corr','pvalue'], index = X_val.index[[0]]) # Returning the start timestamp of the validation fold (later sorted by crossvalidate if split_on_year and sorted are True)
+        else:
+            return pd.DataFrame([func(X_train, y_train)], columns = ['corr','pvalue']) 
+    return compatible_with_crossval
+        
+def spearmanr_par(a: Union[np.ndarray,pd.DataFrame], b: Union[np.ndarray,pd.DataFrame]):
+    """
+i   The timeseries can be discontinuous. Lagging by index cannot be done on that timeseries
+    A lagged version should already be present in the columns so that a_resid = a[:,0] - f(a[:,1])
+    Where a[:,1] is the value of a at t-1. Therefore we remove autocorrelation effects in both variables
+    before correlating only the residuals.
+    based on code at: https://github.com/jakobrunge/tigramite/blob/47d0be9c8117441833a62530566a1babb08e7cc3/tigramite/independence_tests/parcorr.py#L102-L105
+    """
+    if isinstance(a, pd.DataFrame):
+        a = a.values
+    if isinstance(b, pd.DataFrame):
+        b = b.values
+    a_betahat = np.linalg.lstsq(a[:,[1]], a[:,0], rcond = None)[0] # First argument is the condition, second is the dependent
+    a_resid = a[:,0] - np.dot(a[:,[1]], a_betahat)
+    b_betahat = np.linalg.lstsq(b[:,[1]], b[:,0], rcond = None)[0]
+    b_resid = b[:,0] - np.dot(b[:,[1]], b_betahat)
+    return spearmanr(a = a_resid, b = b_resid)
 
 def chi(responseseries: xr.DataArray, precursorseries: xr.DataArray, nq: int = 100, qlim: tuple = None, alpha: float = 0.05, trunc: bool = True, full = False) -> tuple:
     """
     modified from https://github.com/cran/texmex/blob/master/R/chi.R
     Conversion to ECDF space. Computation of chi over a range of quantiles
+    Currently still incomplete
     """
     assert len(responseseries) == len(precursorseries), '1D series should have equal length'
     n = len(responseseries)
@@ -323,7 +369,7 @@ def add_pvalue(func: Callable) -> Callable:
         
     return wrapper
 
-def get_timeserie_properties(series: pd.Series, submonths: list = None, scale_trend_intercept = True, auto_corr_at: list = [1,5]) -> pd.Series:
+def get_timeserie_properties(series: pd.Series, submonths: list = None, scale_trend_intercept = False, auto_corr_at: list = [1,5]) -> pd.Series:
     """ 
     Function to be called on a timeseries (does not need to be contiguous)
     Extracts some statistics that can be of interest and returns them as a Series
@@ -332,9 +378,6 @@ def get_timeserie_properties(series: pd.Series, submonths: list = None, scale_tr
     """
     if not submonths is None:
         series = series.loc[series.index.month.map(lambda m: m in submonths)]
-    std = series.std()
-    mean = series.mean() 
-    length = len(series)
     n_nan = series.isna().sum()
     series = series.dropna() # Remove nans
     lm = LinearRegression()
@@ -348,7 +391,7 @@ def get_timeserie_properties(series: pd.Series, submonths: list = None, scale_tr
     results = pd.Series({'std':std,'mean':mean,'length':length, 'n_nan':n_nan,'trend':trend, 'intercept':intercept})
     for lag in auto_corr_at:
         lagged = pd.Series(series.values, index = series.index - pd.Timedelta(f'{lag}D'), name = f'{lag}D')
-        results.loc[f'auto{lag}'] = pd.merge(left = series, right = lagged, left_index=True, right_index=True, how = 'inner').corr().iloc[0,-1]
+        results.loc[f'auto{lag}'] = pd.merge(left = series.rename('unlagged'), right = lagged, left_index=True, right_index=True, how = 'inner').corr().iloc[0,-1] # Potential bug here in pd merge when the series is not correctly named, because then it searches for columns
     return(results)
 
 def brier_score_clim(p: float) -> float:
@@ -358,28 +401,34 @@ def brier_score_clim(p: float) -> float:
     """
     return p*(p-1)**2 + (1-p)*p**2
 
-def reliability_plot(y_true: pd.Series, y_probs: Union[pd.Series,pd.DataFrame], nbins: int = 10):
+def reliability_plot(y_true: Union[pd.Series,pd.DataFrame], y_probs: Union[pd.Series,pd.DataFrame], nbins: int = 10, fig = None):
     """
     Computes the calibration curve for probabilistic predictions of a binary variable
-    The true binary labels are supplied by y_true
+    The true binary labels are supplied by y_true (these can also be multiple columns, although then their number should match y_probs)
     The matching probabilistic predictions (same row-index) are supplied in y_probs,
     different predictions can be supplied as columns 
     These predictions are binned and for each bin the corresponding frequency is computed
     returns the figure and two axes
     """
     assert np.all(y_true.index == y_probs.index), 'indices should match'
+    if isinstance(y_true, pd.DataFrame):
+        assert len(y_true.columns) == len(y_probs.columns), 'Youve supplied y_true as a Dataframe, make sure the columns match y_probs, or if only a single y series is desired, supply as pd.Series'
+        multiple_y = True
+    else:
+        multiple_y = False
 
-    fig = plt.figure(figsize=(7,7))
-    ax1 = plt.subplot2grid((3, 1), (0, 0), rowspan=2)
-    ax2 = plt.subplot2grid((3, 1), (2, 0))
+    if fig is None:
+        fig = plt.figure(figsize=(7,7))
+    ax1 = plt.subplot2grid((3, 1), (0, 0), rowspan=2, fig = fig)
+    ax2 = plt.subplot2grid((3, 1), (2, 0), fig = fig)
 
     ax1.plot([0, 1], [0, 1], "k:", label="Perfect")
     ax2.set_yscale('log')
     if isinstance(y_probs, pd.Series):
         y_probs = y_probs.to_frame()
 
-    for column_tuple in y_probs.columns:
-        fraction_of_positives, mean_predicted_value = calibration_curve(y_true, y_probs[column_tuple], n_bins=nbins)
+    for i, column_tuple in enumerate(y_probs.columns):
+        fraction_of_positives, mean_predicted_value = calibration_curve(y_true.iloc[:,[i]] if multiple_y else y_true, y_probs[column_tuple], n_bins=nbins)
         ax1.plot(mean_predicted_value,fraction_of_positives, 's-',label = str(column_tuple))
         ax2.hist(y_probs[column_tuple], range=(0,1), bins=nbins, histtype="step", lw=2)
 

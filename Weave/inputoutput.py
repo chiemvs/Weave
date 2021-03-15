@@ -26,6 +26,8 @@ std_dimension_formats = {
         'attrs':{'units':''}},
     'lag':{'encoding':{'datatype':'i1', 'fill_value':nc.default_fillvals['i1']},
         'attrs':{'units':'days'}},
+    'fold':{'encoding':{'datatype':'i1', 'fill_value':nc.default_fillvals['i1']},
+        'attrs':{'units':''}},
     'quantile':{'encoding':{'datatype':'f4', 'fill_value':nc.default_fillvals['f4']},
         'attrs':{'units':''}}}
 

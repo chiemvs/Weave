@@ -14,8 +14,19 @@ import matplotlib.pyplot as plt
 from pathlib import Path
 from typing import Union, List, Tuple
 
+try:
+    import shap
+except ImportError:
+    pass
+
+try:
+    import cartopy.crs as ccrs
+except ImportError:
+    pass
+
 from .processing import TimeAggregator
-from .utils import collapse_restore_multiindex
+from .models import map_foldindex_to_groupedorder, get_validation_fold_time, crossvalidate, HybridExceedenceModel, fit_predict
+from .utils import collapse_restore_multiindex, Region, get_nhplus
 
 def scale_high_to_high(series: pd.Series, fill_na: bool = False):
     """
@@ -39,7 +50,12 @@ def scale_high_to_low(series: pd.Series, fill_na: bool = False):
 
 class ImportanceData(object):
 
-    def __init__(self, basepath: Path, respagg: Union[int, list], separation:Union[int, list]) -> None:
+    def __init__(self, basepath: Path, respagg: Union[int, list], separation:Union[int, list], quantile: float = None, model = None) -> None:
+        """
+        Reading from a directory with importance dataframes. Which ones is determined by the respagg separation combinations
+        Also possible to supply the threshold for which things were computed.
+        Plus the initialized model type used (optional, but useful for the base rate of 
+        """
         self.integer_indices = ['respagg','lag','separation','fold','clustid','timeagg']
         self.basepath = basepath
         try:
@@ -51,27 +67,39 @@ class ImportanceData(object):
         except TypeError:
             self.separation = (separation,)
 
+        self.quantile = quantile
+        self.model = model
+        if not self.model is None:
+            assert not isinstance(self.model, type), 'When supplying a model it needs to be initialized already'
+
+        if isinstance(self.model, HybridExceedenceModel):
+            logging.debug('ImportanceData registered that data comes from hybrid model. Assuming that trended y is applicable')
+            self.yname = 'response.multiagg.trended.parquet' 
+        else:
+            self.yname = 'response.multiagg.detrended.parquet' 
+
     def load_data(self, X_too = False, y_too = False, inputpath: Path = None):
         """
         will automatically load the X values if shap 
         Path discovery according: basepath/respagg/separation/*.parquet
-        Path discovery for X and y is inputpath / precursor.multiagg.parquet and inputpath / response.multiagg.trended.parquet
+        Path discovery for X and y is inputpath / precursor.multiagg.parquet and inputpath / response.multiagg.(de)trended.parquet
         If you wish a custom y either supply .y attribute directly or operate on it
-        conversion of index datatypes (string to integer)
+        conversion of index datatypes (string to integer) but not needed for newest way of storing
         """
         def read_singlefile(fullpath):
             data = pd.read_parquet(fullpath) 
             if not hasattr(self, 'is_shap'):
-                self.is_shap = 'expected_value' in data.columns
+                self.is_shap = 'expected_value' in data.index.get_level_values('variable')
             if self.is_shap:
-                expected = data.loc[:,'expected_value'].copy() # Copied as series
-                data = data.drop('expected_value',level = 0, axis = 1)
-                data.columns = data.columns.remove_unused_levels() # Necessary because otherwise '' of the expected value at other levels will remain in it, and conversion to int will fail
-                data = data.T # transposing because otherwise multiple separations (files) cannot be concatenated by row (with separation in the columns). Fold will not be present in the zeroth axis (in contrast to permimp)
+                expected = data.loc[data.index.get_loc_level('expected_value','variable')[0],:].copy() # Copied as a Dataframe with folds as the index, time still in columns
+                expected.index = expected.index.get_level_values('fold')
+                data = data.drop('expected_value',level = 'variable', axis = 0)
+                data.index = data.index.remove_unused_levels() # Necessary because otherwise the potential '' when expected value did not have dummy values for other levels will mess up string conversion to int, but not even neccesary when shaps were saved correctly
             for index_name in self.integer_indices:
                 try:
                     level = data.index.names.index(index_name)
-                    data.index.set_levels(data.index.levels[level].astype(int), level = level, inplace = True)
+                    if not data.index.levels[level].dtype == int:
+                        data.index.set_levels(data.index.levels[level].astype(int), level = level, inplace = True)
                 except ValueError: # Name is not in the index
                     pass
             if self.is_shap:
@@ -102,13 +130,19 @@ class ImportanceData(object):
         if X_too or self.is_shap:
             assert not inputpath is None, 'For X_too (automatic with shap) please supply an inputpath'
             X_path = list(inputpath.glob('precursor.multiagg.parquet'))[0]
-            self.X = pd.read_parquet(X_path).T 
+            X = pd.read_parquet(X_path) 
+            X = X.iloc[X.index.get_level_values('time').month.map(lambda m: m in [6,7,8]),:] # Seasonal subset starting at 1981 if correctly saved, for a correct grouped CV split when applied
+            if 'fold' in X.columns.names:
+                self.n_folds = len(X.columns.get_level_values('fold').unique())  
+                self.lookup = map_foldindex_to_groupedorder(X, n_folds = self.n_folds, return_foldorder = True) # For later use in loading maps
+            self.X = X.T # Transposing to match the storage of perm imp and shap
         if self.is_shap:
             # Prepare the expected values and load the X data
-            self.expvals = pd.concat(expected_values, keys = keys, axis = 1).T # concatenation as columns, not present because they were series. Want to transpose to match shapley sample format
-            self.expvals.index.names = ['respagg','separation'] 
+            self.expvals = pd.concat(expected_values, keys = keys, axis = 0) # concatenation as columns, not present because they were series
+            self.expvals.index.names = ['respagg','separation'] + self.expvals.index.names[2:] 
+            self.expvals.index = self.expvals.index.reorder_levels(['respagg'] + self.expvals.index.names[2:] + ['separation']) # Make sure that separation comes last, to match the possible removel of the first separation level when double
         if y_too:
-            y_path = list(inputpath.glob('response.multiagg.trended.parquet'))[0]
+            y_path = list(inputpath.glob(self.yname))[0]
             self.y = pd.read_parquet(y_path).T # summer only 
             # We drop the variable (t2m-anom) and clustid labels, as these are meaningless for the matching to importances. And we need to change timeagg to respagg 
             self.y.index = pd.Index(self.y.index.get_level_values('timeagg'), name = 'respagg') 
@@ -119,9 +153,18 @@ class ImportanceData(object):
         When for instance the selection index or columns still have 'fold' in them, this won't work, because it is not present in X. This is also the mechanism with which you slice the X's to summer and spatcov values only
         absent levels are therefore dropped
         """
-        not_present_in_index = [name for name in target.index.names if not name in toreindex.index.names]
-        not_present_in_columns = [name for name in target.columns.names if not name in toreindex.columns.names]
-        return toreindex.reindex(index = target.index.droplevel(not_present_in_index), columns = target.columns.droplevel(not_present_in_columns))
+        not_present_in_index = [target.index.names.index(name) for name in target.index.names if not name in toreindex.index.names] # Level numbers
+        not_present_in_columns = [target.columns.names.index(name) for name in target.columns.names if not name in toreindex.columns.names] # Level numbers
+        try:
+            target_index = target.index.droplevel(not_present_in_index) 
+        except ValueError: # Cannot drop all levels, basically there is no index to compare against
+            target_index = None
+        try:
+            target_columns = target.columns.droplevel(not_present_in_columns)
+        except ValueError:
+            target_columns = None
+
+        return toreindex.reindex(index = target_index, columns = target_columns)
     
     def get_matching_X(self, selection: pd.DataFrame) -> pd.DataFrame:
         return self.get_matching(getattr(self,'X'), selection)
@@ -174,17 +217,93 @@ class ImportanceData(object):
         self.df.name = 'avgabsshap' 
         self.df = self.df.to_frame()
 
+    def get_baserate(self, when: pd.Index, respagg: Union[pd.Index,int] = None, n_folds: int = 5) -> Union[float,pd.Series,pd.DataFrame]:
+        """
+        For the case of binary classification the base probability can be asked
+        if when has length one a float is returned, otherwise a series with the same index
+        The baserate is useful for e.g. shap plots to visualize probabilistic deviation from the base expectation
+        This base model (strength of climatic trend) depends on the respagg (and quantile, but quantile is given at initialization)
+        but of respagg we can have multiple so therefore a pd.DataFrame is returned
+        """
+        assert isinstance(when, pd.core.indexes.datetimes.DatetimeIndex), 'Datetimeindex needed, Multiindex with a fold level is taken care of when fitting'
+        if not isinstance(self.model,HybridExceedenceModel): # In this case the y data is not trended
+            if len(when) == 1:
+                return self.quantile
+            else:
+                return pd.Series(data = np.full(shape = (len(when),), fill_value = self.quantile), index = when, name = 'baserate')
+        else:
+            if not self.model.base_only:
+                self.model.base_only = True
+                warnings.warn(f'model {self.model} set baseonly to return the baserates, in a way that is compatible with non-cv base model fitting')
+            # Should it be connected to the varying folds? In a sense yes... that is what the model saw. 
+            # Not separation dependent
+            tempX = self.X.T # Temporary to row-indexed time. X values themselves do not matter. Only the index is used for the base rate model
+            tempy = self.get_exceedences(when =  tempX.index) # Temporary y with row indexed time, full index for fitting
+            returns = []
+            for respagg_iterator in self.respagg:
+                returns.append(fit_predict(self.model, X_in = tempX, y_in = tempy.loc[:,respagg_iterator], n_folds = n_folds))
+            full = pd.concat(returns, axis = 1, keys = pd.Index(self.respagg, name = 'respagg')) # Full now has a multiindex as row, respagg ints in the column
+            full.index = full.index.droplevel('fold')
+            if respagg is None:
+                return full.loc[when,self.respagg]
+            elif isinstance(respagg, int):
+                return full.loc[when,[respagg]] # List(respagg) is here to make sure we are returning a DataFrame
+            else:
+                return full.loc[when,respagg]
+
+    def get_exceedences(self, when: pd.Index, respagg: int = None) -> Union[pd.Series,pd.DataFrame]:
+        """
+        To get the y in terms of the binary exceedences. Trended or not, 
+        which depends on the loaded y path and the model supplied upon initialization
+        Series if a single respagg is requested, otherwise pd.DataFrame
+        """
+        assert isinstance(when, pd.core.indexes.datetimes.DatetimeIndex), 'Datetimeindex needed, Multiindex with a fold level is taken care of when fitting'
+        thresholds = self.y.quantile(self.quantile, axis = 1) # over axis 1 means over the whole timeseries
+        binaries = pd.DataFrame(self.y.values > thresholds.values[:,np.newaxis], index = thresholds.index, columns = self.y.columns)
+        return binaries.loc[self.respagg if respagg is None else respagg, when].T
+
+    def fit_model(self, respagg: int, separation: int, n_folds: int = 5) -> pd.Series:
+        """
+        Fits the supplied model for one forecasting situation (defined by respagg and separation)
+        with x and y that are attached to this object
+        """
+        if self.model.base_only:
+            self.model.base_only = False
+            warnings.warn(f'model {self.model} set False baseonly')
+        tempX = self.get_matching_X(self.df.loc[np.logical_and(self.df.index.get_loc_level(respagg, 'respagg')[0],self.df.index.get_loc_level(separation,'separation')[0]),:]).T
+        tempy = self.get_exceedences(when =  tempX.index, respagg = respagg).T # Temporary y with row indexed time, full index for fitting
+        preds = fit_predict(self.model, X_in = tempX, y_in = tempy, n_folds = n_folds)
+        preds.index = preds.index.droplevel('fold')
+        return preds
+    
+    def get_predictions(self, when: pd.Index, respagg: int, separation: int):
+        """
+        Gets the predictions of the model for a certain timeslice
+        Caches them for future use
+        """
+        if not hasattr(self, 'predictions'):
+            self.predictions = pd.DataFrame(index = pd.MultiIndex.from_product([self.respagg,self.separation], names = ['respagg','separation']) ,columns = self.y.columns, dtype = 'float64') # Initialize empty
+
+        if self.predictions.loc[(respagg,separation)].isnull().all():
+            self.predictions.loc[(respagg,separation)] = self.fit_model(respagg = respagg, separation = separation) 
+
+        return self.predictions.loc[(respagg,separation),when].T
+
+
 class FacetMapResult(object):
     """
     The facetmapresults just is a consistent wrapping that is accepted by the mapplot function below
     The result is returned from a call to some mapinterface methods.
     columnkeys could be absent, in that case the listofarrays is not nested (for instance, just many shapley combinations mapped to clusters)
     However it can also be present: e.g. the different types of data with get_anom, in that case the listofarrays is nested row-major
+    minimums and maximums are optional. Could be useful for plotting. These are not nested lists
     """
-    def __init__(self, rowkeys, columnkeys, listofarrays):
+    def __init__(self, rowkeys, listofarrays, columnkeys = None, minimums: np.ndarray = None, maximums: np.ndarray = None):
         self.rowkeys = rowkeys
         self.columnkeys = columnkeys
         self.listofarrays = listofarrays
+        self.minimums = minimums
+        self.maximums = maximums
 
 class MapInterface(object):
     """
@@ -195,15 +314,30 @@ class MapInterface(object):
     related to important variables at a certain timestep
     """
 
-    def __init__(self, corclustpath: Path, anompath: Path = Path(os.path.expanduser('~/processed/'))) -> None:
+    def __init__(self, corclustpath: Path, anompath: Path = Path(os.path.expanduser('~/processed/')), impdata: ImportanceData = None) -> None:
         """
         Default for anompath. Usually does not vary. corclustpath does (depending on clustering parameters and correlation measure)
+        The original impdata object is optional but needs to be supplied when wanting to load validation fold specific patterns
+        The translation table of impdata provides fieldfold numbers belonging to regular fold 
         """
         self.basepath = corclustpath
         self.anompath = anompath
         self.presentvars = []
+        if not impdata is None:
+            self.lookuptable = impdata.lookup
 
-    def get_field(self, variable: str, timeagg: int, separation: int, what: str = 'clustid') -> xr.DataArray:
+    def lookup(self, regularfold: int) -> int:
+        """
+        Called to lookup the fieldfold belonging to regular fold
+        """
+        if hasattr(self, 'lookuptable'):
+            fieldfold = self.lookuptable.loc[regularfold, 'fieldfold']
+            logging.debug(f'Fold {regularfold} leads to fieldfold {fieldfold}')
+            return fieldfold 
+        else:
+            raise AttributeError('lookuptable is not present. Please initialize the MapInrerface with an ImportanceData object')
+
+    def get_field(self, fold: int, variable: str, timeagg: int, separation: int, what: str = 'clustid') -> xr.DataArray:
         """
         Extracts and returns one (lat/lon) array from the dataset
         'what' denotes the array to get: possibilities are clustid and correlation
@@ -215,7 +349,7 @@ class MapInterface(object):
             if not timeagg in da.coords['timeagg']:
                 self.load_one_dataset(variable = variable, timeagg = timeagg) # da needs to be reloaded
         # a problem arises with da[{'timeagg':timeagg,'separation':separation}] because separation (negative) is interpreted as positional arguments not a label value
-        da = getattr(self, variable)[what].sel(timeagg = timeagg, separation = separation)
+        da = getattr(self, variable)[what].sel(fold = fold, timeagg = timeagg, separation = separation)
         return da
 
     def cache_everything(self) -> None:
@@ -245,49 +379,62 @@ class MapInterface(object):
             setattr(self, variable, xr.concat([getattr(self,variable), ds], dim = 'timeagg')) 
             logging.debug(f'{variable} was present, concatenated timeagg {timeagg} to existing')
 
-    def map_to_fields(self, imp: pd.Series, remove_unused: bool = True) -> FacetMapResult:
+    def map_to_fields(self, imp: pd.Series, remove_unused: bool = True, unit: str = '') -> FacetMapResult:
         """
         Mapping a selection of properly indexed importance data to the clustids
-        associated to the variables/timeaggs/separations 
+        associated to the folds/variables/timeaggs/separations 
         it finds the unique groups. attemps mapping
         respagg does not play any role (not a property of input)
         returns a multiindex for the groups and a list with the filled clustid fields
+        Because imp does not carry its own units (unlike xarray) possible to supply the new unit
         """
         assert 'clustid' in imp.index.names, 'mapping to fields by means of clustid, should be present in index, not be reduced over'
         assert isinstance(imp, pd.Series), 'Needs to be a series (preferably with meaningful name) otherwise indexing will fail'
-        def map_to_field(impvals: pd.Series, variable: str, timeagg: int, separation: int, remove_unused: bool) -> xr.DataArray:
+        def map_to_field(impvals: pd.Series, fold: int, variable: str, timeagg: int, separation: int, remove_unused: bool) -> xr.DataArray:
             """ 
             does a single field. for all unique non-nan clustids in the field
             it calls a boolean comparison. Values not belonging are kept 
-            the ones belonging are set to the importance is found in impvals
+            the ones belonging to the clustid are set to the importance is found in impvals
             if not found (and remove_unused) then it is set to nan. So visually clusters can disappear
             The only way this repeated call can go wrong is if 
             the assigned importance has the exact value of a clustid integer called later
+            This corner case can happen with shapvals of 0 and e.g. with the maximum scaled perimps (0 and 1)
+            Therefore the Id's in the repeated call are taken outside the range of any impval
+            by adding 10000
             """
-            logging.debug(f'attempt field read and importance mapping for {variable}, timeagg {timeagg}, separation {separation}')
-            clustidmap = self.get_field(variable = variable, timeagg = timeagg, separation = separation, what = 'clustid').copy() # Copy because replacing values. Don't want that to happen to our cached dataset
+            logging.debug(f'attempt field read and importance mapping for {variable}, fold {fold}, timeagg {timeagg}, separation {separation}')
+            fieldfold = self.lookup(fold) 
+            clustidmap = self.get_field(fold = fieldfold, variable = variable, timeagg = timeagg, separation = separation, what = 'clustid').copy() # Copy because replacing values. Don't want that to happen to our cached dataset
+            clustidmap = clustidmap + 10000.0 # Dtype was already float32 because of the nans present
             ids_in_map = np.unique(clustidmap) # still nans possible
-            ids_in_map = ids_in_map[~np.isnan(ids_in_map)].astype(int) 
-            ids_in_imp = impvals.index.get_level_values('clustid')
+            ids_in_map = ids_in_map[~np.isnan(ids_in_map)]  
+            ids_in_imp = impvals.index.get_level_values('clustid') + 10000.0 # conversion to float
             assert len(ids_in_imp) <= len(ids_in_map), 'importance series should not have more clustids than are contained in the corresponding map field'
             for clustid in ids_in_map:
+                logging.debug(f'attempting mask for map clustid {clustid}')
                 if clustid in ids_in_imp:
-                    clustidmap = clustidmap.where(clustidmap != clustid, other = impvals.iloc[ids_in_imp == clustid][0]) # Boolean statement is where the values are maintaned. Other states where (if true) the value is taken from
+                    clustidmap = clustidmap.where(clustidmap != clustid, other = impvals.iloc[ids_in_imp == clustid].iloc[0]) # Boolean statement is where the values are maintaned. Other states where (if true) the value is taken from
                 elif remove_unused:
                     clustidmap = clustidmap.where(clustidmap != clustid, other = np.nan)
                 else:
                     pass
             clustidmap.name = impvals.name
+            clustidmap.attrs.update({'units':unit})
+            clustidmap.coords.update({'fold':fold}) # Read the fieldfold, now give it the fold numer of the fold it belongs to.
             return clustidmap 
 
-        grouped = imp.groupby(['variable','timeagg','separation']) # Discover what is in the imp series
+        grouped = imp.groupby(['fold','variable','timeagg','separation']) # Discover what is in the imp series
         results = [] 
         keys = [] 
+        minimums = [] # Just some statistics useful for plotting later
+        maximums = []
         for key, series in grouped: # key tuple is composed of (variable, timeagg, separation)
             results.append(map_to_field(series, *key, remove_unused = remove_unused))
             keys.append(key) 
-        keys = pd.MultiIndex.from_tuples(keys, names = ['variable','timeagg','separation'])
-        return FacetMapResult(keys, None, results)
+            minimums.append(float(series.min()))
+            maximums.append(float(series.max()))
+        keys = pd.MultiIndex.from_tuples(keys, names = ['fold','variable','timeagg','separation'])
+        return FacetMapResult(rowkeys = keys, listofarrays = results, minimums = np.array(minimums), maximums = np.array(maximums))
 
     def get_anoms(self, imp: Union[pd.Series, pd.DataFrame], timestamp: pd.Timestamp = None, mask_with_clustid: bool = True, correlation_too: bool = True) -> FacetMapResult:
         """
@@ -323,26 +470,71 @@ class MapInterface(object):
             anom_field = t.compute(nprocs = 1, ndayagg = timeagg, rolling = False) # Only one process is needed (as we aggregate only one slice). Because the slice is the exact right length, rolling could be both True or False, both result in a time dim of length 1
             return anom_field.squeeze() # Get rid of the dimension of length 1 (timestamp becomes dimensionless coord
 
-        grouped = imp.groupby(['variable','timeagg','separation']) # Discover what is in the imp series
+        grouped = imp.groupby(['fold','variable','timeagg','separation']) # Discover what is in the imp series A single fold is not neccessarily needed, the anomaly is independent of that
         results = [] 
         rowkeys = [] 
         columnkeys = ['anom', 'clustid'] 
         if correlation_too:
             columnkeys.insert(1,'correlation') # placed at first index, because like the anom (0) it will potentially be masked, and because like clustid (-1) it can be read with self.get_field
-        for key, _ in grouped: # key tuple is composed of (variable, timeagg, separation)
+        for key, _ in grouped: # key tuple is composed of (fold, variable, timeagg, separation)
             within_group_results = [None] * len(columnkeys)  # Will contain the anoms potentially more (forms one row in the return list) 
-            within_group_results[0] = get_anom(*key) # Special function. For correlation and clustid we already have self.get_field
+            within_group_results[0] = get_anom(*key[1:]) # Special function. For correlation and clustid we already have self.get_field. Fold is not neccesary here
             for extra in columnkeys[1:]:
-                within_group_results[columnkeys.index(extra)] = self.get_field(*key, what = extra)
+                fieldfold = self.lookup(key[0]) # To load the correct cluster of correlation field we need to lookup the fieldfold and generate a new key
+                newkey = (fieldfold,) + key[1:] 
+                extramap = self.get_field(*newkey, what = extra)
+                extramap.coords.update({'fold':key[0]}) # Read the fieldfold, now give it the fold numer of the fold it belongs to.
+                within_group_results[columnkeys.index(extra)] = extramap 
             if mask_with_clustid:
                 for index in range(len(within_group_results[:-1])): # Clustid is excluded, cannot be masked with itself
                     within_group_results[index] = within_group_results[index].where(~within_group_results[-1].isnull(), other = np.nan) # Preserve where a cluster is found. np.nan otherwise
 
             results.append(within_group_results)
             rowkeys.append(key) 
-        rowkeys = pd.MultiIndex.from_tuples(rowkeys, names = ['variable','timeagg','separation'])
+        rowkeys = pd.MultiIndex.from_tuples(rowkeys, names = ['fold','variable','timeagg','separation'])
         columnkeys = pd.Index(columnkeys)
-        return FacetMapResult(rowkeys, columnkeys, results)
+        return FacetMapResult(rowkeys = rowkeys, columnkeys = columnkeys, listofarrays = results)
+
+    def fraction_significant(self, timeaggs: list = None, plot: bool = True, fold: int = None):
+        """
+        For the present variables, compute the amount of non-nan gridcells in the domain
+        of each of variable and express it as a fraction.
+        When correlations are loaded this fraction corresponds to the fraction of significant cells
+        if fold is not given we compute an average over them
+        if plot then plot fraction against separation with a panel per desired timeagg
+        else the compted amounts and fractions are returned as a frame
+        """
+        results = []
+        for variable in self.presentvars:
+            array = getattr(self, variable)['correlation']
+            n_signif = array.count(['latitude','longitude']).to_dataframe()
+            n_signif['n'] = len(array.coords['latitude']) * len(array.coords['longitude'])
+            n_signif['fraction'] = n_signif['correlation'] / n_signif['n']
+            results.append(n_signif)
+        results = pd.concat(results, keys = pd.Index(self.presentvars, name = 'variable'), axis = 0)
+        if (fold is None) and ('fold' in results.index.names):
+            groupers = list(results.index.names)
+            groupers.remove('fold')
+            results = results.groupby(groupers).mean()
+        if not plot:
+            return results
+        else:
+            timeaggs = results.index.get_level_values('timeagg').unique() if timeaggs is None else timeaggs
+            fig, axes = plt.subplots(nrows = 1, ncols = len(timeaggs), sharex = True, sharey = True, figsize = (15,3.5), squeeze = False)
+            for i, timeagg in enumerate(timeaggs):
+                ax = axes[0,i]
+                if not fold is None:
+                    frame = results.loc[(slice(None),timeagg,slice(None),fold),'fraction'].unstack('variable')
+                else:
+                    frame = results.loc[(slice(None),timeagg,slice(None)),'fraction'].unstack('variable')
+                ax.plot(frame.index.get_level_values('separation'), frame.values)
+                ax.set_title(f'timeagg: {timeagg}, fold: {fold}')
+                ax.set_xlabel('separation [days]')
+                if i == 0:
+                    ax.set_ylabel('fraction significant cells')
+                if i == (len(timeaggs) - 1):
+                    ax.legend(frame.columns.values)
+            return fig, axes
 
 
 def dotplot(df: pd.Series, custom_order: list = None, sizescaler = 50, alphascaler = 1, nlegend_items = 4):
@@ -378,7 +570,7 @@ def dotplot(df: pd.Series, custom_order: list = None, sizescaler = 50, alphascal
     global_min = plotdf[imp_var].max() # Needs updating to the selected variables
     global_max = plotdf[imp_var].min() 
     for i, variable in enumerate(custom_order):
-        paneldf = plotdf.loc[df.index.get_loc_level(key = variable, level = 'variable')[0],:] # Nice, now you don't have to know where in the levels 'variable' is to match the amount of required slice(None) in the slicing tuple
+        paneldf = plotdf.iloc[df.index.get_loc_level(key = variable, level = 'variable')[0],:] # Nice, now you don't have to know where in the levels 'variable' is to match the amount of required slice(None) in the slicing tuple
         global_min = min(global_min, paneldf[imp_var].min())
         global_max = max(global_max, paneldf[imp_var].max())
         rgba_colors = np.zeros((len(paneldf),4),dtype = 'float64')
@@ -402,12 +594,15 @@ def dotplot(df: pd.Series, custom_order: list = None, sizescaler = 50, alphascal
     return fig, axes
 
 
-def mapplot(mapresult: FacetMapResult, wrap_per_row: int = 1, over_columns: str = None):
+def mapplot(mapresult: FacetMapResult, wrap_per_row: int = 1, over_columns: str = None, match_scales: bool = False, fancyplot: bool = True, region: Region = get_nhplus(), projection = None):
     """
     No functionality to subset-select from the mapresult. This can be achieved by inputting a smaller dataframe/series to MapInterface methods
     For the case of absent columnkeys there is the option to plot vs a level in the rowindex
     otherwise the panels are distributed according wrap_per_row
     tuples are immutable which is the reason that FacetMapresult is not a named-tuple
+    match_scales will put all maps on the same colorscale
+    Fancyplot uses cartopy for the map, usually global, but can also be limited to a region
+    Uses the Millweide projection as the default, but another initialized one can be supplied
     """
     if mapresult.columnkeys is None: # Then the option to check over_columns. Nevertheless we need to create a nesting ourselves
         assert not isinstance(mapresult.listofarrays[0], list), 'We should not be dealing with a nested list when columnkeys are absent'
@@ -419,9 +614,8 @@ def mapplot(mapresult: FacetMapResult, wrap_per_row: int = 1, over_columns: str 
             columnkeys = None
             for index in range(0,len(mapresult.listofarrays),wrap_per_row):
                 listofarrays.append(mapresult.listofarrays[index:(index+wrap_per_row)]) # Slice is allowed to overshoot which is good
-            #mapresult.listofarrays = [mapresult.listofarrays[index:(index+wrap_per_row)] for index in range(0,len(mapresult.listofarrays),wrap_per_row)] # Slice is allowed to overshoot which is good
         else: # makes nested, but also set the columnkeys
-            dummyframe = pd.Series(data = np.nan, index = mapresult.rowkeys).unstack(over_columns)
+            dummyframe = pd.Series(data = np.nan, index = mapresult.rowkeys).unstack(over_columns) # Unstack might generate combinations that are not there.
             rowkeys = dummyframe.index # Not overwritng we still need them to search, but also immutable because it is a tuple
             columnkeys = dummyframe.columns # Not overwritng, we still need them to search
             listofarrays = []
@@ -430,8 +624,12 @@ def mapplot(mapresult: FacetMapResult, wrap_per_row: int = 1, over_columns: str 
                 for columnkey in columnkeys:
                     originalkey = list(rowkey)
                     originalkey.insert(mapresult.rowkeys.names.index(over_columns),columnkey) # insert the column value at the right level
-                    originalindex = mapresult.rowkeys.get_loc(tuple(originalkey))  
-                    rowlist.append(mapresult.listofarrays[originalindex])
+                    try:
+                        originalindex = mapresult.rowkeys.get_loc(tuple(originalkey))  
+                        rowlist.append(mapresult.listofarrays[originalindex])
+                    except KeyError: # in this case it is an unstack combination that is not present
+                        rowlist.append(None) # Leave the entry empty 
+
                 listofarrays.append(rowlist)
         # Now we can reset
         mapresult.listofarrays = listofarrays
@@ -440,22 +638,41 @@ def mapplot(mapresult: FacetMapResult, wrap_per_row: int = 1, over_columns: str 
 
     nrows = len(mapresult.listofarrays)
     ncols = len(mapresult.listofarrays[0]) 
+    if fancyplot:
+        subplot_kw = dict(projection=ccrs.Mollweide() if (projection is None) else projection) # The desired projection
+        array_crs = ccrs.PlateCarree() # what projection the data is in (regular lat lon grid)
+    else:
+        subplot_kw = dict()
 
-    fig, axes = plt.subplots(nrows = nrows, ncols = ncols, squeeze = False, sharex = True, sharey = True, figsize = (4*ncols,3.5 * nrows))
+    fig, axes = plt.subplots(nrows = nrows, ncols = ncols, squeeze = False, sharex = True, sharey = True, figsize = (4*ncols,3.5 * nrows), subplot_kw = subplot_kw)
     for i, rowlist in enumerate(mapresult.listofarrays):
         for j, array in enumerate(rowlist):
             ax = axes[i,j]
-            armin = array.min()
-            armax = array.max()
-            absmax = max(abs(armin),armax)
-            if armin < 0 and armax > 0: # If positive and negative values are present then we want to center.
-                cmap = plt.get_cmap('RdBu_r')
-                im = ax.pcolormesh(array, vmin = -absmax, vmax = absmax, cmap = cmap) 
-            else:
-                im = ax.pcolormesh(array, vmin = armin, vmax = armax) 
-            cbar = fig.colorbar(im, ax = ax)
-            cbar.set_label(f'{array.name} [{array.units}]')
-            ax.set_title(array._title_for_slice())
+            if not array is None:
+                armin = array.min() if not match_scales else mapresult.minimums.min()
+                armax = array.max() if not match_scales else mapresult.maximums.max()
+                absmax = max(abs(armin),armax)
+                if armin < 0 and armax > 0: # If positive and negative values are present then we want to center the colorscale
+                    kwargs = dict(cmap = plt.get_cmap('RdBu_r'), vmin = -absmax, vmax = absmax)
+                else:
+                    kwargs = dict(vmin = armin, vmax = armax)
+                if not fancyplot:
+                    im = ax.pcolormesh(array,**kwargs) 
+                else:
+                    if not region is None:
+                        extent = np.array(region[1:])[[1,3,2,0]]  # drop the name and reorder to x0,x1,y0,y1 
+                        ax.set_extent(tuple(extent), crs = array_crs)
+                    ax.coastlines()
+                    # Define lats and lons at grid corners for pcolormesh + projection
+                    lats = array.latitude.values # Interpreted as northwest corners (90 is in there)
+                    lons = array.longitude.values # Interpreted as northwest corners (-180 is in there, 180 not)
+                    lats = np.concatenate([lats[[0]] - np.diff(lats)[0], lats], axis = 0) # Adding the sourthern edge 
+                    lons = np.concatenate([lons, lons[[-1]] + np.diff(lons)[0]], axis = 0)# Adding the eastern edge
+                    #im = ax.contourf(array.longitude,array.latitude,array.values, transform = array_crs, **kwargs) #Cannot currently do pcolormesh needs lats and lons at gridcorners 
+                    im = ax.pcolormesh(lons,lats,array.values, shading = 'flat', transform = array_crs, **kwargs) #Cannot currently do pcolormesh needs lats and lons at gridcorners 
+                cbar = fig.colorbar(im, ax = ax)
+                cbar.set_label(f'{array.name} [{array.units}]')
+                ax.set_title(array._title_for_slice())
             if j == 0:
                 ax.set_ylabel(f'{mapresult.rowkeys[i]}')
     return fig, axes
@@ -473,15 +690,15 @@ def barplot(impdf: Union[pd.Series,pd.DataFrame], n_most_important = 10, ignore_
         impdf = pd.DataFrame(impdf) # Just so we can loop over columns
     
     if impdf.columns.nlevels > 1: # Dropping levels on axis = 1 for easier plot titles
-        impdf, oldcolnames = collapse_restore_multiindex(impdf, axis = 1)
+        impdf, oldcolnames, dtypes = collapse_restore_multiindex(impdf, axis = 1)
     if impdf.index.nlevels > 1: # Also dropping on axis = 0 
-        impdf, oldrownames = collapse_restore_multiindex(impdf, axis = 0, ignore_level = ignore_in_names)
+        impdf, oldrownames, dtypes = collapse_restore_multiindex(impdf, axis = 0, ignore_level = ignore_in_names)
 
     ncols = impdf.shape[-1]
     fig, axes = plt.subplots(nrows = 1, ncols = ncols, squeeze = False, sharex = True, figsize = (4*ncols,4))
 
     for i, col in enumerate(impdf.columns):
-        sorted_by_col = impdf.loc[:,col].sort_values(ascending = False).iloc[:n_most_important]
+        sorted_by_col = impdf.loc[:,col].sort_values(ascending = False).iloc[(n_most_important - 1)::-1]
         ax = axes[0,i]
         ax.barh(range(n_most_important), width = sorted_by_col)
         ax.set_yticks(range(n_most_important))
@@ -489,6 +706,141 @@ def barplot(impdf: Union[pd.Series,pd.DataFrame], n_most_important = 10, ignore_
         ax.set_title(col)
     return fig, axes
 
+def in_out_kept(base: Union[pd.Series,pd.DataFrame], other: Union[pd.Series,pd.DataFrame], n_most_important = 10, ignore_in_names=['respagg', 'lag']):
+    """
+    Function to display which predictors are new in the n_most important
+    of other, compared to base. Also the ones that are kept, and the ones that went out
+    Runs per fold. 
+    """
+    if isinstance(base, pd.Series):
+        base = pd.DataFrame(base) # Just so we can loop over columns
+    if isinstance(other, pd.Series):
+        other = pd.DataFrame(other) # Just so we can loop over columns
+    
+    assert (base.shape == other.shape) and all(base.columns == other.columns) ,'Everything except the values of the datasets need to match, columns and index content, and column-order'
 
-def scatterplot():
-    pass
+    if base.index.nlevels > 1: # Also dropping on axis = 0 
+        base, oldrownames, dtypes = collapse_restore_multiindex(base, axis = 0, ignore_level = ignore_in_names)
+        other, oldrownames, dtypes = collapse_restore_multiindex(other, axis = 0, ignore_level = ignore_in_names)
+    # Initialize all at the maximum possible size, 
+    # ordering of kept and out index is actually by importance in base
+    # ordering of new index is actually by importance in new
+    indf = pd.DataFrame(None, columns = base.columns, index = pd.RangeIndex(n_most_important, name = 'other_imp'))
+    outdf = pd.DataFrame(None, columns = base.columns, index = pd.RangeIndex(n_most_important, name = 'base_imp'))
+    keptdf = pd.DataFrame(None, columns = base.columns, index = pd.RangeIndex(n_most_important, name = 'base_imp'))
+    for col in base.columns:
+        base_by_col = base.loc[:,col].sort_values(ascending = False).iloc[:(n_most_important - 1)]
+        other_by_col = other.loc[:,col].sort_values(ascending = False).iloc[:(n_most_important - 1)]
+        for place in range(len(base_by_col)):
+            key = base_by_col.index[place]
+            if key in other_by_col.index:
+                keptdf.loc[place,col] = key
+            else:
+                outdf.loc[place,col] = key
+        for place in range(len(other_by_col)):
+            key = other_by_col.index[place]
+            if not key in base_by_col.index:
+                indf.loc[place,col] = key
+
+    return indf.dropna(how = 'all'), outdf.dropna(how = 'all'), keptdf.dropna(how = 'all')
+
+def scatterplot(impdata: ImportanceData, selection: pd.DataFrame, alpha = 0.5, quantile: float = None, ignore_in_names = ['respagg','lag','metric']):
+    """
+    scatterplot of X vs y, X is chosen by the row of impdf 
+    Two colors. One for the validation fold, one for the training, if X variables depend on the fold
+    The exceedence quantile can be added as a horizontal line
+    """
+    X_full = impdata.get_matching_X(selection) # columns is the time axis
+    y_summer = impdata.get_matching_y(selection) # columns is the time axis
+    X_summer = X_full.loc[:,y_summer.columns]
+
+    assert X_summer.shape[0] == 1, 'Currently only accepts a single selected X variable, change selection'
+    fig, axes = plt.subplots(nrows = 1, ncols = 1, squeeze = False, sharey = True, figsize = (5,5))
+    ax = axes[0,0]
+
+    if hasattr(impdata, 'n_folds'):
+        """
+        Then we want to map which part of the X and y series is training and which part is not
+        """
+        selected_fold = int(X_summer.index.get_level_values('fold').values)
+        validation_indexer = slice(impdata.lookup.loc[selected_fold,'valstart'],impdata.lookup.loc[selected_fold,'valend'])
+        train_indexer = ~y_summer.columns.isin(y_summer.loc[:,validation_indexer].columns) # Inverting the slice
+        ax.scatter(x = X_summer.loc[:,train_indexer].values.squeeze(), y = y_summer.loc[:,train_indexer].values.squeeze(), alpha = alpha, label = 'train')
+        ax.scatter(x = X_summer.loc[:,validation_indexer].values.squeeze(), y = y_summer.loc[:,validation_indexer].values.squeeze(), alpha = alpha, label = 'validation')
+        ax.set_title(f'validation: {validation_indexer.start.strftime("%Y-%m-%d")} - {validation_indexer.stop.strftime("%Y-%m-%d")}, imp: {float(np.round(selection.values,3))}')
+    else:
+        ax.scatter(x = X_summer.values.squeeze(), y = y_summer.values.squeeze(), alpha = alpha, label = 'full')
+
+    # Some general annotation
+    if not quantile is None:
+        ax.hlines(y = y_summer.quantile(quantile, axis = 1), xmin = X_summer.min(axis = 1), xmax = X_summer.max(axis =1), label = f'q{quantile}') # y was loaded as trended or detrended. depening on Hybrid model presence at init of impdata
+    ax.legend()
+    ax.set_xlabel(f'{X_summer.index[0]}')
+    ax.set_ylabel(f'response agg: {y_summer.index[0]}')
+
+    return fig, axes
+
+def data_for_shapplot(impdata: ImportanceData, selection: pd.DataFrame, base_too: bool = True, fit_base: bool = True) -> dict:
+    """
+    Function to prepare data for shap.force_plot and shap.summary_plot
+    that selects X-vals accompanying the selection
+    Collapses the column names (otherwise not accepted)
+    Does a transpose for the numpy arrays to feed to the functions
+    shap plot cannot handle an array of base values (e.g. coming from the hybrid method) so checks for that
+    """
+    assert isinstance(selection, pd.DataFrame), 'Need columns for this, if only a single timeslice e.g. select with .iloc[:,[100]]'
+    respagg = selection.index.get_level_values('respagg').unique() # Potentially passing a pd.Index to get_baserate
+    assert len(respagg) == 1, 'A shap plot should contain only the contributions for one response time aggregation' 
+
+    if base_too:
+        if not fit_base:
+            base_value = np.unique(impdata.get_matching(impdata.expvals, selection))
+        else:
+            base_value = np.unique(impdata.get_baserate(when = selection.columns, respagg = respagg))
+
+        assert len(base_value) == 1, f'the base_value should be unique, your selection potentially contains multiple folds, or if fit_base={fit_base} the base rate of the hybrid model could change with time'
+        returndict = dict(base_value = float(base_value))
+    else:
+        returndict = dict()
+
+    try:
+        X_vals = impdata.get_matching_X(selection)
+        returndict.update(features = X_vals.values.T)
+    except: # In case e.g. clustid is aggregated out
+        warnings.warn('Could not find X matching the selection, indexes might not correspond, proceed without feature values')
+        returndict.update(features = None)
+
+    lagpresent = 'lag' in selection.index.names 
+    selection, names, dtypes = collapse_restore_multiindex(selection, axis = 0, ignore_level = ['lag'] if lagpresent else None, inplace = False)
+    returndict.update(dict(shap_values = selection.values.T, feature_names = selection.index))
+
+    return returndict 
+
+def yplot(impdata: ImportanceData, resp_sep_combinations: List[Tuple[int]] = [(31,-15)], when: pd.Index = None, startdate: pd.Timestamp = None, enddate: pd.Timestamp = None):
+    """
+    Calls upon the importance data object to fit the desired models and get the desired exceedences
+    Then fabricates a plot where each line forms the predicted probability.
+    On top of that line dots denote a True binary resulting observation
+    Possibility to do this for a custom time range, supplied by when, or from startdate and endate
+    """
+    if not when is None:
+        customrange = when
+    elif not ((startdate is None) or (enddate is None)):
+        customrange = pd.date_range(startdate, enddate, freq = 'D', name = 'time')
+    else:
+        customrange = ImportanceData.y.columns # Just take range from the object
+
+    customrange = customrange[customrange.map(lambda stamp: stamp.month in [6,7,8])] # Assert summer only
+    
+    fig, ax = plt.subplots()
+    for respagg, separation in resp_sep_combinations:
+        obsdata = impdata.get_exceedences(when = customrange, respagg = respagg) # pd.Series of binaries
+        linedata = impdata.get_predictions(when = customrange, respagg = respagg, separation = separation) # Also pd.Series
+        ax.plot(linedata, label = f'pred: {respagg} at {separation}')
+        ax.scatter(x = obsdata.loc[obsdata].index, y = linedata.loc[obsdata], label = f'obs: {respagg} > {impdata.quantile} = True')
+
+    ax.legend()
+    ax.set_xlabel('time')
+    ax.set_ylabel('probability')
+    return fig, ax
+    

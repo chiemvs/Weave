@@ -219,21 +219,20 @@ class TimeAggregator(Computer):
 
     def compute(self, nprocs, ndayagg: int = 1, method: str = 'mean', firstday: pd.Timestamp = None, rolling: bool = False):
         """
-        Will call workers to aggregate a number of days, starting at the first index, stamped left, and moving one step further in case of rolling. And in case of non-rolling, starting with a certain index, stamping left and jumping further
+        Will call workers to aggregate a number of days, starting at the first index, stamped left, and moving one step further in case of rolling. And in case of non-rolling, starting with at the first index, stamping left and jumping further
+        One also has to option to determine the starting index manually with the firstday argument
         Will not use multiprocessing when the desired nprocs is only one
         """
+        try:
+            which_first = int(np.where(self.coords['time'] == firstday.to_datetime64())[0]) # Returns a tuple of indices (first row then column) but we only have the first dimension
+            logging.debug(f'TimeAggregator found firstday {firstday} at location {which_first} to start aggregation, rolling = {rolling}')
+        except AttributeError:
+            which_first = 0
+            logging.debug(f'TimeAggregator found no firstday, aggregation will start at location 0, rolling = {rolling}')
         if rolling:
             # Slicing off the end where not enough days are present to aggregate
-            time_axis_indices = np.arange(0,self.shape[0] - ndayagg + 1, 1)
-            logging.debug(f'TimeAggregator will start rolling aggregation')
+            time_axis_indices = np.arange(which_first,self.shape[0] - ndayagg + 1, 1)
         else:
-            # Getting the first day 
-            try:
-                which_first = int(np.where(self.coords['time'] == firstday.to_datetime64())[0]) # Returns a tuple of indices (first row then column) but we only have the first dimension
-                logging.debug(f'TimeAggregator found firstday {firstday} at location {which_first} to start non-rolling aggregation')
-            except:
-                which_first = 0
-                logging.debug(f'TimeAggregator found no firstday {firstday}, non-rolling aggregation will start at location 0')
             time_axis_indices = np.arange(which_first,self.shape[0] - ndayagg + 1, ndayagg)
 
         if nprocs > 1:
