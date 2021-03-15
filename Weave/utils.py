@@ -205,7 +205,7 @@ def kendall_predictand(data: np.ndarray) -> float:
     Takes in two timeseries in a 2D array (n_obs,[x,y]). computes weighted kendall tau.
     Weights are determined by the y (done by rank is None, meaning that weighting is determined by x)
     (rank = True, would compute twice, once with x and second with y)
-    Significance is not implemented but might be obtained by bootstrapping
+    Significance is not implemented but might be obtained by the bootstrap decorator
     """
     corr, _ = weightedtau(x = data[:,1], y = data[:,0], rank = None)
     return corr
@@ -267,6 +267,7 @@ def chi(responseseries: xr.DataArray, precursorseries: xr.DataArray, nq: int = 1
     """
     modified from https://github.com/cran/texmex/blob/master/R/chi.R
     Conversion to ECDF space. Computation of chi over a range of quantiles
+    Currently still incomplete
     """
     assert len(responseseries) == len(precursorseries), '1D series should have equal length'
     n = len(responseseries)
