@@ -23,7 +23,7 @@ OUTDIR = Path(sys.argv[5])
 sys.path.append(PACKAGEDIR)
 from Weave.models import permute_importance, compute_forest_shaps, map_foldindex_to_groupedorder, HybridExceedenceModel
 
-logging.basicConfig(filename= TMPDIR / 'shap_pathdep_q08.log', filemode='w', level=logging.DEBUG, format='%(process)d-%(relativeCreated)d-%(message)s')
+logging.basicConfig(filename= TMPDIR / 'permimp_train_q06.log', filemode='w', level=logging.DEBUG, format='%(process)d-%(relativeCreated)d-%(message)s')
 
 path_complete = PATTERNDIR / 'precursor.multiagg.parquet'
 path_y = PATTERNDIR / 'response.multiagg.trended.parquet'
@@ -50,10 +50,10 @@ def execute_shap(respseptup):
     responseagg, separation = respseptup
     retpath = OUTDIR / str(responseagg) / str(separation)
     if not retpath.exists():
-        X,y = read_data(responseagg = responseagg, separation = separation, quantile = 0.8)
+        X,y = read_data(responseagg = responseagg, separation = separation, quantile = 0.666)
 
         model = HybridExceedenceModel(fit_base_to_all_cv = True, max_depth = 5, n_estimators = 2500, min_samples_split = 30, max_features = 35, n_jobs = njobs_per_imp)
-        shappies = compute_forest_shaps(model, X, y, on_validation = False, use_background = False, bg_from_training = True, sample_background = 'standard', n_folds = 5, shap_kwargs = dict(check_additivity = False))
+        shappies = compute_forest_shaps(model, X, y, on_validation = False, use_background = True, bg_from_training = True, sample_background = 'standard', n_folds = 5, shap_kwargs = dict(check_additivity = False))
         retpath.mkdir(parents = True)
         pq.write_table(pa.Table.from_pandas(shappies), retpath / 'responsagg_separation.parquet')
         logging.debug(f'subprocess has written out SHAP frame at {retpath}')
@@ -76,7 +76,7 @@ def execute_perm_imp(respseptup):
         #RandomForestClassifier.predict = wrapper # To avoid things inside permutation importance package  where it is only possible to invoke probabilistic prediction with twoclass y.
         #m = RandomForestClassifier(max_depth = 7, n_estimators = 1500, min_samples_split = 40, max_features = 35, n_jobs = njobs_per_imp)
         model = HybridExceedenceModel(fit_base_to_all_cv = True, max_depth = 5, n_estimators = 2500, min_samples_split = 30, max_features = 35, n_jobs = njobs_per_imp)
-        ret = permute_importance(model, X_in = X, y_in = y, evaluation_fn = brier_score_loss, n_folds = 5, perm_imp_kwargs = dict(nimportant_vars = 30, njobs = njobs_per_imp, nbootstrap = 1500))
+        ret = permute_importance(model, X_in = X, y_in = y, on_validation = False, evaluation_fn = brier_score_loss, n_folds = 5, perm_imp_kwargs = dict(nimportant_vars = 30, njobs = njobs_per_imp, nbootstrap = 1500))
         retpath.mkdir(parents = True)
         pq.write_table(pa.Table.from_pandas(ret), retpath / 'responsagg_separation.parquet')
         logging.debug(f'subprocess has written out importance frame at {retpath}')
@@ -87,13 +87,13 @@ if __name__ == "__main__":
     """
     Parallelized with multiprocessing over repsagg / separation models
     """
-    njobs_per_imp = 1
-    nprocs = NPROC // njobs_per_imp
-    logging.debug(f'Spinning up {nprocs} processes with each {njobs_per_imp} for shapley')
-    responseaggs = np.unique(pd.read_parquet(path_y).columns.get_level_values('timeagg'))
-    separations = np.unique(pd.read_parquet(path_complete).columns.get_level_values('separation'))
-    with Pool(nprocs) as p:
-        p.map(execute_shap, itertools.product(responseaggs, separations))
+    #njobs_per_imp = 1
+    #nprocs = NPROC // njobs_per_imp
+    #logging.debug(f'Spinning up {nprocs} processes with each {njobs_per_imp} for shapley')
+    #responseaggs = np.unique(pd.read_parquet(path_y).columns.get_level_values('timeagg'))
+    #separations = np.unique(pd.read_parquet(path_complete).columns.get_level_values('separation'))
+    #with Pool(nprocs) as p:
+    #    p.map(execute_shap, itertools.product(responseaggs, separations))
     """
     Parallelized with threading for forest fitting and permutation importance per respagg / separation model
     """
@@ -102,3 +102,12 @@ if __name__ == "__main__":
     #njobs_per_imp = NPROC
     #for respagg_sep in itertools.product(responseaggs, separations):
     #    execute_perm_imp(respagg_sep)
+    njobs_per_imp = 1
+    nprocs = NPROC // njobs_per_imp
+    logging.debug(f'Spinning up {nprocs} processes with each {njobs_per_imp} for permimp')
+    responseaggs = np.unique(pd.read_parquet(path_y).columns.get_level_values('timeagg'))
+    separations = np.unique(pd.read_parquet(path_complete).columns.get_level_values('separation'))
+    with Pool(nprocs) as p:
+        p.map(execute_perm_imp, itertools.product(responseaggs, separations))
+    #njobs_per_imp = NPROC
+    #execute_perm_imp((31,-15))
