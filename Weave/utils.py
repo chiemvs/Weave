@@ -58,6 +58,12 @@ def get_natlantic() -> Region:
     """
     return(Region("natlantic", 60, -60, 30, 0))
 
+def get_euratl() -> Region:
+    """
+    Eur-atlantic sector often used for regime computation, Cassou 2005, 20–80N, 90W–30E
+    """
+    return(Region("euratl", 80, -90, 20, 30))
+
 def get_corresponding_ctype(npdtype: type) -> type:
     simple_types = [ct.c_byte, ct.c_short, ct.c_int, ct.c_long, ct.c_longlong,
     ct.c_ubyte, ct.c_ushort, ct.c_uint, ct.c_ulong, ct.c_ulonglong,
@@ -378,6 +384,9 @@ def get_timeserie_properties(series: pd.Series, submonths: list = None, scale_tr
     """
     if not submonths is None:
         series = series.loc[series.index.month.map(lambda m: m in submonths)]
+    std = series.std()
+    mean = series.mean() 
+    length = len(series)
     n_nan = series.isna().sum()
     series = series.dropna() # Remove nans
     lm = LinearRegression()
