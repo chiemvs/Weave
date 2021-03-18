@@ -12,13 +12,18 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import brier_score_loss
 from pathlib import Path
 
-#sys.path.append('/usr/people/straaten/Documents/Weave/')
-sys.path.append('..')
+TMPDIR = Path(sys.argv[1])
+PACKAGEDIR = sys.argv[2] 
+NPROC = int(sys.argv[3])
+basepath = Path(sys.argv[4])
+
+sys.path.append(PACKAGEDIR)
 from Weave.inputoutput import Reader
+from Weave.processing import TimeAggregator
 from Weave.models import fit_predict, fit_predict_evaluate, permute_importance, map_foldindex_to_groupedorder, hyperparam_evaluation, BaseExceedenceModel, HybridExceedenceModel
 from Weave.utils import get_timeserie_properties, brier_score_clim, get_euratl, get_europe, agg_time
 
-logging.basicConfig(level = logging.DEBUG)
+logging.basicConfig(filename= TMPDIR / 'simplemodels.log', filemode='w', level=logging.DEBUG, format='%(process)d-%(relativeCreated)d-%(message)s')
 
 """
 Creation of simple input datasets
@@ -26,39 +31,41 @@ Creation of simple input datasets
 - Only climate change (logistic base model)
 - Average of all variables in the cluster region 
 """
-base = Path('/scistor/ivm/jsn295/')
-outpath = base / 'simple_input/'
-anomdir = base / 'processed/'
-clusterdir = base / 'clusters/'
-
+#basepath = Path('/scistor/ivm/jsn295/')
+outpath = basepath / 'simple_input/'
+anomdir = basepath / 'processed/'
+clusterdir = basepath / 'clusters/'
 """
-Regimes
+Regimes, also defined at multiple timescales
+As an experiment we will extract also the EOFS within anomalies at different timescales 
 """
-#r = Reader(anomdir / 'z300_nhnorm.anom.nc', blocksize = 5000, region = get_euratl())
-#z300 = r.read(into_shared = False)  # Not detrended, but anomalies, daily, so no filter
-#z300 = z300.reshape((z300.shape[0],-1)) # Raveling the spatial dimension
-#z300summer = z300[r.coords['time'].dt.season == 'JJA',...]
+#timeaggs = [1, 3, 5, 7, 11, 15, 21, 31] 
+#for timeagg in timeaggs:
+#    ta = TimeAggregator(datapath = anomdir / 'z300_nhnorm.anom.nc', share_input = True, region = get_euratl())
+#    z300 = ta.compute(nprocs = NPROC, ndayagg = timeagg, method = 'mean', rolling = True) 
+#    del ta
+#    coords = z300.coords # Storing coords for reference
+#    shape = z300.shape 
+#    z300 = z300.values.reshape((shape[0],-1)) # Raveling the spatial dimension, keeping only the values
+#    z300summer = z300[coords['time'].dt.season == 'JJA',...]
 #
-#U, s, Vt = np.linalg.svd(z300summer, full_matrices=False) # export OPENBLAS_NUM_THREADS=25 put upfront.
+#    U, s, Vt = np.linalg.svd(z300summer, full_matrices=False) # export OPENBLAS_NUM_THREADS=25 put upfront.
 #
-## Contributions in terms of normalized eigenvalues (s**2) / biggest one drop below 0.01 beyond 20
-#ncomps = 20
-#eigvals = (s**2)[:ncomps]
-#eigvectors = Vt[:ncomps,:].reshape((ncomps,) + z300.shape[1:])
-#joined = r.coords.to_dataset().drop_dims('time')
-#joined.coords['component'] = pd.Index(list(range(ncomps)), dtype = np.int64)
-#joined['eigvectors'] = (('component','latitude','longitude'),eigvectors)
-#joined['eigvalues'] = (('component',),eigvals)
-#joined.to_netcdf(outpath / 'Z300_components_daily_JJA_1979_2019.nc')
-#
-##Project daily anom fields into the ncomps
-#projection = z300 @ Vt.T[:,:ncomps] # Not summer only because we need lagged values too
-#timeseries = xr.DataArray(projection, name = 'projection', dims = ('time','component'), coords = {'component':list(range(ncomps)),'time': r.coords['time']})
-#timeseries.attrs['units'] = ''
-#timeseries.to_netcdf(outpath / 'Z300_projections_daily.nc')
-#other_format = timeseries.to_pandas()
-#other_format.columns = other_format.columns.astype(str)
-#other_format.to_parquet(outpath / 'Z300_projections_daily.parquet') # Also save in another format
+#    # Contributions in terms of normalized eigenvalues (s**2) / biggest one drop below 0.01 beyond 20
+#    ncomps = 20
+#    eigvals = (s**2)[:ncomps]
+#    eigvectors = Vt[:ncomps,:].reshape((ncomps,) + shape[1:])
+#    joined = coords.to_dataset().drop_dims('time')
+#    joined.coords['component'] = pd.Index(list(range(ncomps)), dtype = np.int64)
+#    joined['eigvectors'] = (('component','latitude','longitude'),eigvectors)
+#    joined['eigvalues'] = (('component',),eigvals)
+#    joined.to_netcdf(outpath / f'Z300_{timeagg}D_components_JJA_1979_2019.nc')
+#    
+#    #Project anom fields into the ncomps, this is already at the timescale
+#    projection = z300 @ Vt.T[:,:ncomps] # Not summer only because we need lagged values too
+#    timeseries = xr.DataArray(projection, name = 'projection', dims = ('time','component'), coords = {'component':list(range(ncomps)),'time': coords['time']})
+#    timeseries.attrs['units'] = ''
+#    timeseries.to_netcdf(outpath / f'Z300_{timeagg}D_projections.nc')
 
 """
 Average of others within response area
@@ -96,17 +103,18 @@ Lagging and aggregating to be quickly usable in models
 Does not follow the full model in the sense of having separate timeseries per fold
 """
 
-#means = pd.read_parquet(outpath / 'clustermean_daily.parquet') 
-#means = means.stack('variable').to_xarray() # Xarrays work with the agg_time function
-#eofs = xr.open_dataarray(outpath / 'Z300_projections_daily.nc').rename({'component':'variable'})
-#goalset = pd.read_parquet(base / 'clusters_cv_spearmanpar_varalpha_strict' / 'response.multiagg.trended.parquet') 
-#timeaggs = goalset.columns.get_level_values('timeagg') 
-absolute_separation = np.array([0,1,3,5,7,11,15,21,31]) # Days inbetween end of precursor and beginning of response 
-def lag_aggregate(array) -> pd.DataFrame: # First dimension of array should be time
+def lag_aggregate(array, timeaggs: list, aggregated: bool = False) -> pd.DataFrame: # First dimension of array should be time
+    """
+    Possibility to be already left stamp aggregated, boolean should be true 
+    And then give a single value for timeaggs (because the different arrays need to be supplied with different function calls)
+    """
     collection = []
     for timeagg in timeaggs:
         laglist = list(-timeagg - absolute_separation) # Dynamic lagging to avoid overlap, lag zero is the overlap
-        aggarray = agg_time(array = array, ndayagg = timeagg, method = 'mean', rolling = True, firstday = pd.Timestamp('1981-01-01'))
+        if aggregated:
+            aggarray = array.sel(time = slice(pd.Timestamp('1981-01-01'),None))
+        else:
+            aggarray = agg_time(array = array, ndayagg = timeagg, method = 'mean', rolling = True, firstday = pd.Timestamp('1981-01-01'))
         for separation, lag in zip(absolute_separation,laglist): # Lagging needed
             lagarray = aggarray.copy()
             lagarray['time'] = lagarray['time'] - pd.Timedelta(str(lag) + 'D') # Ascribe each value to another timestamp (e.g. lag of -10 means precursor value of originally 1979-01-01 is assigned to 1979-01-11
@@ -121,81 +129,93 @@ def lag_aggregate(array) -> pd.DataFrame: # First dimension of array should be t
             collection.append(lagframe)
     return pd.concat(collection, axis = 1)
 
-#eof_frame = lag_aggregate(eofs) # All left stamped
-#pq.write_table(pa.Table.from_pandas(eof_frame, preserve_index = True), where = outpath / 'Z300_projections.parquet')
-#mean_frame = lag_aggregate(means)
+goalset = pd.read_parquet(basepath / 'clusters_cv_spearmanpar_varalpha_strict' / 'response.multiagg.trended.parquet') 
+aggs = goalset.columns.get_level_values('timeagg').unique()
+absolute_separation = np.array([0,1,3,5,7,11,15,21,31]) # Days inbetween end of precursor and beginning of response 
+
+#means = pd.read_parquet(outpath / 'clustermean_daily.parquet') 
+#means = means.stack('variable').to_xarray() # Xarrays work with the agg_time function
+#mean_frame = lag_aggregate(array = means, timeaggs = aggs, aggregated = False)
 #pq.write_table(pa.Table.from_pandas(mean_frame, preserve_index = True), where = outpath / 'clustermean.parquet')
+
+eof_frames = []
+for agg in aggs:
+    eof = xr.open_dataarray(outpath / f'Z300_{agg}D_projections.nc').rename({'component':'variable'})
+    eof_frames.append(lag_aggregate(array = eof, timeaggs = [agg], aggregated = True)) # Already left stamped
+eof_frame = pd.concat(eof_frames, axis = 1)
+#pq.write_table(pa.Table.from_pandas(eof_frame, preserve_index = True), where = outpath / 'Z300_projections_multiD_patterns.parquet')
 
 """
 Model test for a regime based input
 """
-eofs = pd.read_parquet(outpath / 'Z300_projections.parquet')
-response = pd.read_parquet(base / 'clusters_cv_spearmanpar_varalpha_strict' / 'response.multiagg.trended.parquet') 
-threshold = 0.666
-separation = 0 
-respagg = 5 
-inputtimeagg = 5
-y = response.loc[:,(slice(None),respagg,slice(None))].iloc[:,0] # Only summer, starting 1981
-X = eofs.loc[:, (slice(None),inputtimeagg,slice(None),separation)].dropna(axis = 0, how = 'any') 
-#test = X.apply(get_timeserie_properties, axis = 0, **{'scale_trend_intercept':True}) # Scaled trends are not insane (relative to the variance)
-def to_simple(X,ncomponents = 2):
-    """Create a simple set, time and 2 EOFS also scaled, time last column"""
-    eof = X.loc[:,(list(range(ncomponents)),)].copy()
-    eof['time'] = eof.index.to_julian_date()
-    scaler = StandardScaler(copy = True, with_mean = True, with_std = True)
-    scaled = scaler.fit_transform(eof) # leads to attributes .mean_ and .var_
-    return pd.DataFrame(scaled, index = eof.index, columns = eof.columns) 
-
-y = y > y.quantile(threshold)
-
-model = HybridExceedenceModel(fit_base_to_all_cv = True, **dict(max_depth = 3, n_estimators = 1000, min_samples_split = 30, max_features = 0.8, n_jobs = 20))
-base = BaseExceedenceModel()
-base.greedyfit = True
-log = LogisticRegression(penalty = 'l2', C = 1.0, fit_intercept = True)
-
-""" 
-Compare a simple logistic model with climate change only 
-Should do a bit better? With especially positive weight on the second EOF (
-"""
-ncomp = 2
-x = to_simple(X, ncomponents = ncomp)
-log.fit(X = x, y = y)
-base.fit(X, y)
-bslog = brier_score_loss(y, log.predict_proba(x)[:,log.classes_.tolist().index(True)])
-bsbase = brier_score_loss(y, base.predict(X))
-print(f'y {respagg} > {threshold}, x {inputtimeagg} at {separation}')
-print(f'simple EOF, ncomponents {ncomp}')
-print(f'scaled coefs, time: {log.coef_[0][-1]}, eofs {log.coef_[0][:-1]}')
-print(f'bs: {bslog}')
-print(f'base model')
-print(f'scaled coefs, time: {base.coef_[0][-1]}')
-print(f'bs: {bsbase}')
-print(f'bss 1 - (eof/base): {1 - bslog/bsbase}')
-
-#predeof = fit_predict(model, X_in = X, y_in = y, n_folds = 5)
-#bseof = brier_score_loss(y, predeof)
-#predbase = fit_predict(base, X_in = X, y_in = y, n_folds = 5)
-#bsbase = brier_score_loss(y, predbase)
-##
-### Testing the relabeling according to new grouped order
-#map_foldindex_to_groupedorder(X = X, n_folds = 5, return_foldorder = False)
-###props = X.apply(get_timeserie_properties, axis = 0, **{'scale_trend_intercept':False})
+#eofs = pd.read_parquet(outpath / 'Z300_projections_1D_patterns.parquet')
+#mean = pd.read_parquet(outpath / 'clustermean.parquet')
+#response = pd.read_parquet(base / 'clusters_cv_spearmanpar_varalpha_strict' / 'response.multiagg.trended.parquet') 
+#threshold = 0.666
+#separation = 0 
+#respagg = 5 
+#inputtimeagg = 5
+#y = response.loc[:,(slice(None),respagg,slice(None))].iloc[:,0] # Only summer, starting 1981
+#X = eofs.loc[:, (slice(None),inputtimeagg,slice(None),separation)].dropna(axis = 0, how = 'any') 
+#X_soil = mean.loc[:,('swvl13_europe_mean',inputtimeagg,slice(None),separation)]
+##test = X.apply(get_timeserie_properties, axis = 0, **{'scale_trend_intercept':True}) # Scaled trends are not insane (relative to the variance)
+#def to_simple(X, ncomponents = 2, soilm: pd.DataFrame = None):
+#    """
+#    Create a simple set, by selecting time and 2 EOFS 
+#    Possible to also add a soilm as a second to last column (time always last)
+#    All columns are scaled, if folds are detected in the EOF
+#    then time and soilm get fakefolds to work with crossvalidation
+#    """
+#    time = X.index.to_julian_date()
+#    if 'fold' in X.columns.names: # This will be the zeroth level
+#        folds = X.columns.get_level_values('fold').unique().tolist()
+#        eof = X.loc[:,(slice(None),list(range(ncomponents)),)].copy() # components is at the level of 'variable'
+#        dummy_levels = [list(dummy) for dummy in eof.columns[-1][2:]] # skipping fold and variable 
+#        time = pd.DataFrame(time.values[:,np.newaxis], columns = pd.MultiIndex.from_product([folds,['time']] + dummy_levels, names = eof.columns.names), index = eof.index)
+#        if not soilm is None:
+#            soilm = pd.concat([soilm]*len(folds), keys = folds, names = ['fold'])
+#            eof = eof.join(soilm)
+#        eof = eof.join(time)
+#    else:
+#        eof = X.loc[:,(list(range(ncomponents)),)].copy()
+#        if not soilm is None:
+#            eof = eof.join(soilm)
+#        eof['time'] = time
+#    scaler = StandardScaler(copy = True, with_mean = True, with_std = True)
+#    scaled = scaler.fit_transform(eof) # leads to attributes .mean_ and .var_
+#    return pd.DataFrame(scaled, index = eof.index, columns = eof.columns) 
 #
-#model = HybridExceedenceModel(max_depth = 5, n_estimators = 2500, min_samples_split = 30, max_features = 35, n_jobs = 20)
-#test = permute_importance(model, X_in = X, y_in = y, evaluation_fn = brier_score_loss, scoring_strategy = 'argmax_of_mean', perm_imp_kwargs = dict(njobs = 10, nbootstrap = 1, nimportant_vars = 2), single_only = False, n_folds = 5, split_on_year = True)
-#shappies = compute_forest_shaps(r2, X, y, on_validation = False, bg_from_training = True, sample = 'standard', n_folds = 5, split_on_year = True)
-
-#from Weave.models import crossvalidate, get_validation_fold_time
-#f = crossvalidate(5,True,True)(get_validation_fold_time)
-#testi = f(X_in = y, y_in = y, end_too = True)
-
-#evaluate_kwds = dict(scores = [brier_score_loss], score_names = ['bs'])
-#hyperparams = dict(n_estimators = [1500,2500,3500])
-#other_kwds = dict(n_jobs = 25, min_samples_split = 30, max_depth = 5, max_features = 35) 
-#ret = hyperparam_evaluation(HybridExceedenceModel, X, y, hyperparams, other_kwds, fit_predict_evaluate_kwds = dict(properties_too = False, n_folds = 5, evaluate_kwds = evaluate_kwds))
-#mean = ret.groupby('score', axis = 0).mean()
+#y = y > y.quantile(threshold)
 #
-#baseline = BaseExceedenceModel() # Most strict baseline (non-cv) that we can imagine, just for the idea of what the bs values mean
-#bs = fit_predict_evaluate(baseline, X_in = X, y_in = y, X_val = X, y_val = y, evaluate_kwds = evaluate_kwds)
-#bs2 = brier_score_loss(y, fit_predict(baseline, X_in = X, y_in = y, n_folds = 5)) # Less strict (cv) baseline
-
+##model = HybridExceedenceModel(fit_base_to_all_cv = True, **dict(max_depth = 3, n_estimators = 1000, min_samples_split = 30, max_features = 0.8, n_jobs = 20))
+#base = BaseExceedenceModel()
+#base.greedyfit = True
+#log = LogisticRegression(penalty = 'l2', C = 1.0, fit_intercept = True)
+#log2 = LogisticRegression(penalty = 'l2', C = 1.0, fit_intercept = True)
+#
+#""" 
+#Compare a simple logistic model with climate change only 
+#Should do a bit better? With especially positive weight on the second EOF (
+#"""
+#ncomp = 2
+#x = to_simple(X, ncomponents = ncomp)
+#x_soil = to_simple(X, ncomponents = ncomp, soilm = X_soil)
+#log.fit(X = x, y = y)
+#log2.fit(X = x_soil, y = y)
+#base.fit(X, y)
+#bslog = brier_score_loss(y, log.predict_proba(x)[:,log.classes_.tolist().index(True)])
+#bslog2 = brier_score_loss(y, log2.predict_proba(x_soil)[:,log2.classes_.tolist().index(True)])
+#bsbase = brier_score_loss(y, base.predict(X))
+#print(f'y {respagg} > {threshold}, x {inputtimeagg} at {separation}')
+#print(f'base model')
+#print(f'scaled coefs, time: {base.coef_[0][-1]}')
+#print(f'bs: {bsbase}')
+#print(f'simple EOF, ncomponents {ncomp}')
+#print(f'scaled coefs, time: {log.coef_[0][-1]}, eofs {log.coef_[0][:-1]}')
+#print(f'bs: {bslog}')
+#print(f'bss 1 - (eof/base): {1 - bslog/bsbase}')
+#print(f'simple EOF, ncomponents {ncomp} plus soil')
+#print(f'scaled coefs, time: {log2.coef_[0][-1]}, eofs {log2.coef_[0][:-2]}, soil {log2.coef_[0][-2]}')
+#print(f'bs: {bslog2}')
+#print(f'bss 1 - (eof_soil/base): {1 - bslog2/bsbase}')
+#
