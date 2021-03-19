@@ -30,8 +30,9 @@ class BaseExceedenceModel(LogisticRegression):
     Modeled with a time-dependent logistic regression (one coefficient)
     Only the (scaled) time axis of any X input is used
     """
-    def __init__(self, penalty = 'l2', C = 1.0, fit_intercept = True, *args, **kwargs) -> pd.Series:
+    def __init__(self, penalty = 'l2', C = 1.0, fit_intercept = True, greedyfit = False, *args, **kwargs) -> pd.Series:
         LogisticRegression.__init__(self, penalty = penalty, C = C, fit_intercept = fit_intercept, *args, **kwargs)
+        self.greedyfit = greedyfit
 
     def __repr__(self):
         return f'LogisticRegression with scaled time index as only input: penalty={self.penalty}, C={self.C}, fit_intercept={self.fit_intercept}'
@@ -51,18 +52,30 @@ class BaseExceedenceModel(LogisticRegression):
             X = self.scaler.transform(X)
         return X
 
-    def fit(self, X, y):
+    def fit(self, X, y, fullX = None, fully = None):
         """
         Modification of the original fit to fit only on the time-axis of X
+        Full X and full y can be supplied when greedy fit is true 
         """
-        LogisticRegression.fit(self = self, X = self.transform_input(X, force = True), y = y)
+        if self.greedyfit:
+            assert (not fullX is None) and (not fully is None), 'fullX and fully need to be supplied by the crossvalidation if you want the base to fit to all data in cv mode'
+            LogisticRegression.fit(self = self, X = self.transform_input(fullX, force = True), y = fully)
+        else:
+            LogisticRegression.fit(self = self, X = self.transform_input(X, force = True), y = y)
         assert len(self.coef_) == 1, 'Only one feature (namely time) should be used in the fitting'
         if (self.coef_ < 0).any():
             warnings.warn('BaseExceedenceModel shows a negative dependence on time, so a negative climate change trend. Is your procedure for creating y correct?')
 
+    def predict_proba(self, X):
+        """
+        Modification to use transformed inputs, still make a two-class prediction
+        """
+        return LogisticRegression.predict_proba(self = self, X = self.transform_input(X, force = False))
+
     def predict(self, X) -> np.ndarray: 
         """
-        Modification of the original predict_proba function
+        Modification of the original predict_proba function, to return oneclass 
+        (neccessary for e.g. permutation importance)
         Only returning the probability of True. not indexed (this is handled by e.g. fit_predict)
         """
         two_class_preds = LogisticRegression.predict_proba(self = self, X = self.transform_input(X, force = False))
@@ -94,10 +107,9 @@ class HybridExceedenceModel(object):
         within a cross-validation setting, where these things are automated
         possible to fit and predict only the base part. Can speed up if only that is desired, but keeping the same model
         """
-        self.base = BaseExceedenceModel()
+        self.base = BaseExceedenceModel(greedyfit = fit_base_to_all_cv)
         self.rf = RandomForestRegressor(*rfargs, **rfkwargs)
         self.greedyfit = fit_base_to_all_cv # Also needed to recognize greedy need at base for algortihms seeing only the hybrid top 
-        self.base.greedyfit = fit_base_to_all_cv
         self.base_only = base_only
         self.cap = cap_predictions
 
@@ -111,14 +123,12 @@ class HybridExceedenceModel(object):
         Full X and full y can be supplied when greedy fit is true (channeled only to base fit func)
         """
         if self.base.greedyfit:
-            assert (not fullX is None) and (not fully is None), 'fullX and fully need to be supplied by the crossvalidation if you want the fit_base_to_all option'
-            self.base.fit(X = fullX, y = fully)
+            self.base.fit(X = X, y = y, fullX = fullX, fully = fully)
         else:
             self.base.fit(X = X, y = y)
         if not self.base_only:
             baserate = self.base.predict(X = X) # Uses only the time axis of X, predicting the training data
             probabilistic_anoms = y - baserate # Bool minus numeric 
-            #logloss = -np.log(baserate) * y - np.log(1 - baserate)  * (~y)
             self.rf.fit(X = X, y = probabilistic_anoms)
 
     def predict(self, X) -> np.ndarray:
@@ -258,9 +268,9 @@ def fit_predict_evaluate(model: Callable, X_in, y_in, X_val = None, y_val = None
     """
     if properties_too:
         assert isinstance(model, (RandomForestRegressor,RandomForestClassifier)), 'extracting properties works only with forest models'
-    if isinstance(model, RandomForestClassifier): # Renaming of the methods, such that the preferred one for the classifier is a probabilistic prediction
+    if isinstance(model, (RandomForestClassifier, LogisticRegression)): # Renaming of the methods, such that the preferred one for the classifier is a probabilistic prediction. BaseExceedenceModel will also qualify as LogisticRegression
         def wrapper(*args, **kwargs):
-            return model.predict_proba(*args,**kwargs)[:,-1] # Last class is True
+            return model.predict_proba(*args,**kwargs)[:,-1] # Last class is True (assumed, though could be moved into inner_func to be sure after fit, but then repeated assignment of a method.)
         model.predfunc = wrapper
     else:
         model.predfunc = model.predict
@@ -301,9 +311,9 @@ def fit_predict(model: Callable, X_in, y_in, X_val = None, y_val = None, n_folds
     Within cv-mode this can give you a full set of predictions on which (in total) you can call an evaluation function,
     for that you can discard the fold index. And check (when used with split_on_year) that the index matches you y_val variable index 
     """
-    if isinstance(model, RandomForestClassifier): # Renaming of the methods, such that the preferred one for the classifier is a probabilistic prediction
+    if isinstance(model, (RandomForestClassifier, LogisticRegression)): # Renaming of the methods, such that the preferred one for the classifier is a probabilistic prediction
         def wrapper(*args, **kwargs):
-            return model.predict_proba(*args,**kwargs)[:,-1] # Last class is True
+            return model.predict_proba(*args,**kwargs)[:,-1] # Last class is True (assumed, though could be moved into inner_func to be sure after fit, but then repeated assignment of a method.)
         model.predfunc = wrapper
     else:
         model.predfunc = model.predict
@@ -359,11 +369,13 @@ def permute_importance(model: Callable, X_in, y_in, X_val = None, y_val = None, 
     """
     Calls permutation importance functionality 
     This functionality does single-multi-pass permutation on the validation part of the data
-    The model should be initialized but not fitted
+    The model should be initialized but not fitted, it will be fitted here and inside the package
+    .predict is called. .predict_proba is only called for two-class y, so for single-class y + probs
+    Make sure the .predict method is overwritten by .predict_proba
     If only X_in and y_in are supplied, then data is intepreted as the complete validation/training set
     on which cross validation is called.
     perm_imp_kwargs are mainly computational arguments
-    unlike shapley values, permutation importance is computed on the validation folds always
+    like shapley values, permutation importance can be computed on the validation or training fold
     """
     logging.debug(f'PermImp will be started on validation, scoring by {evaluation_fn} with {scoring_strategy} as most important')
     if single_only:
@@ -386,8 +398,7 @@ def permute_importance(model: Callable, X_in, y_in, X_val = None, y_val = None, 
             X_frame = X_train
         y_frame = y_frame.to_frame() # Required form for perm imp
         _, names, dtypes = collapse_restore_multiindex(X_frame, axis = 1, inplace = True) # Collapse of the index is required unfortunately for the column names
-        #result = sklearn_permutation_importance(model = model, scoring_data = (X_val.values, y_val.values), evaluation_fn = evaluation_fn, scoring_strategy = scoring_strategy, variable_names = X_val.columns, **perm_imp_kwargs) # Pass the data as numpy arrays. Avoid bug in PermutationImportance, see scripts/minimum_example.py https://github.com/gelijergensen/PermutationImportance/issues/84
-        result = sklearn_permutation_importance(model = model, scoring_data = (X_frame, y_frame), evaluation_fn = evaluation_fn, scoring_strategy = scoring_strategy, variable_names = X_frame.columns, **perm_imp_kwargs) # Pass the data as numpy arrays. Avoid bug in PermutationImportance, see scripts/minimum_example.py https://github.com/gelijergensen/PermutationImportance/issues/84
+        result = sklearn_permutation_importance(model = model, scoring_data = (X_frame, y_frame), evaluation_fn = evaluation_fn, scoring_strategy = scoring_strategy, variable_names = X_frame.columns, **perm_imp_kwargs) # Previously had to pass the data as numpy arrays. Avoid bug in PermutationImportance, see scripts/minimum_example.py https://github.com/gelijergensen/PermutationImportance/issues/84
         singlepass = result.retrieve_singlepass()
         singlepass_rank_scores = pd.DataFrame([{'rank':tup[0], 'score':np.mean(tup[1])} for tup in singlepass.values()], index = singlepass.keys()) # We want to export both rank and mean score. (It is allowed to average here over all bootstraps even when this happens in one fold of the cross validation, as the grand mean will be equal as group sizes are equal over all cv-folds)
         _,_,_ = collapse_restore_multiindex(singlepass_rank_scores, axis = 0, names = names, dtypes = dtypes, inplace = True)
@@ -422,10 +433,12 @@ def get_forest_properties(forest: Union[RandomForestRegressor,RandomForestClassi
     else:
         return pd.Series(counts.mean(axis = 0), index = pd.Index(properties, name = 'properties'))
 
-def compute_forest_shaps(model: Callable, X_in, y_in, X_val = None, y_val = None, on_validation = True, use_background = True, bg_from_training = True, sample_background = 'standard', n_folds = 10, split_on_year = True, explainer_kwargs = dict(), shap_kwargs = dict(check_additivity = True)) -> pd.DataFrame:
+def compute_shaps(model: Callable, X_in, y_in, X_val = None, y_val = None, on_validation = True, use_background = True, bg_from_training = True, sample_background = 'standard', n_folds = 10, split_on_year = True, explainer_kwargs = dict(), shap_kwargs = dict(check_additivity = True)) -> pd.DataFrame:
     """
-    Computation of (non-interaction) SHAP values through shap.TreeExplainer. Outputs a frame of shap values with same dimensions as X
-    A non-fitted forest (classifier or regressor), potentially inside a hybrid model, options to get the background data from the training or the validation, or not use background at all
+    Computation of (non-interaction) SHAP values through shap.TreeExplainer or shap.LinearExplainer. 
+    Outputs a frame of shap values with same dimensions as X
+    linear models can be explained (e.g. LogisticRegression, with explanations in log-odds space)
+    and a non-fitted forest (classifier or regressor), potentially inside a hybrid model, options to get the background data from the training or the validation, or not use background at all
     the sampling of the background can for instance be without balancing, but also in the case of classification
     with only negatives (what makes the exceedence differ from a case where there are no exceedences) but with changing base probability this not advised 
     Additionally with 'correlation' the background can be constructed with a masker doing grouped masking
@@ -435,8 +448,8 @@ def compute_forest_shaps(model: Callable, X_in, y_in, X_val = None, y_val = None
     """
     assert sample_background in ['standard','negative','correlation']
     max_samples = 500
-    logging.debug(f'TreeShap will be started for {"validation" if on_validation else "training"}, using background data = {use_background}, sampled from {"validation" if not bg_from_training else "training"}, event sampling is {sample_background}')
-    # Use similar setup as fit_predict_evaluate, with an inner_func that is potentially called multiple times
+    logging.debug(f'Shap will be started for {"validation" if on_validation else "training"}, using background data = {use_background}, sampled from {"validation" if not bg_from_training else "training"}, event sampling is {sample_background}')
+
     def inner_func(model, X_train, y_train, X_val: pd.DataFrame, y_val: pd.Series) -> pd.DataFrame:
         """
         Will return a dataframe with the dimensions of X_train or X_val (depending on 'on_validation' argument
@@ -461,12 +474,15 @@ def compute_forest_shaps(model: Callable, X_in, y_in, X_val = None, y_val = None
        
         if isinstance(model, HybridExceedenceModel): # In this case we interpret the regressor in probability space, not the logistic base rate model for climate change beneath it.
             explainer = shap.TreeExplainer(model = model.rf, data = background if use_background else None, **explainer_kwargs) # feature perturbation is by default interventional when data is not None, else 'tree_path_dependent'
-        else:
+        elif isinstance(model, (RandomForestRegressor,RandomForestClassifier)):
             explainer = shap.TreeExplainer(model = model, data = background if use_background else None, **explainer_kwargs)
+        else:
+            assert sample_background == 'standard', 'models needs LinearExplainer which is currently only compatible with standard background data'
+            explainer = shap.LinearExplainer(model = model, data = X_bg_set, **explainer_kwargs) # Not compatable with the Maskers, only mean and std are extracted 
 
         shap_values = explainer.shap_values(X_val if on_validation else X_train, **shap_kwargs) # slow. Outputs a numpy ndarray or a list of them when classifying. We need to add columns and indices
         if isinstance(model, RandomForestClassifier):
-            shap_values = shap_values[model.classes_.tolist().index(True)] # Only the probabilities for the positive case
+            shap_values = shap_values[model.classes_.tolist().index(True)] # Only the probabilities for the positive case, Shap has called predict_proba, so output was two-class
             explainer.expected_value = explainer.expected_value[model.classes_.tolist().index(True)] # Base probability / frequency (potentially through a link function) according to the background data (or path dependence). This plus the average shap sum should add up to the climatological probability
         frame = pd.DataFrame(shap_values.T, columns = X_val.index if on_validation else X_train.index, index = X_val.columns if on_validation else X_train.columns) # Transpose because we want to match the format of permutation importance
         # Now we want to add 'expected_value' as another 'variable', Taking a used value (same dtype) as dummy for the other levels

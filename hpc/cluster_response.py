@@ -15,7 +15,7 @@ OUTDIR = Path(sys.argv[5])
 
 sys.path.append(PACKAGEDIR)
 
-from Weave.clustering import Clustering
+from Weave.clustering import Clustering, Exceedence
 from Weave.inputoutput import Writer
 
 # E-OBS part, has a very large memory footprint and thus seems to work best with 5 workers and shared reading memory
@@ -52,11 +52,10 @@ t2m.close()
 c = Clustering(varname = 't2m', groupname = 'mean', storedir = Path(TMPDIR), varpath = OBSDIR / 't2m_europe.nc')
 c.reshape_and_drop_obs(season='JJA', mask=mask)
 
-c.prepare_for_distance_algorithm(where=None, manipulator=cl.Exceedence, kwargs={'quantile':0.98})
+c.prepare_for_distance_algorithm(where=None, manipulator=Exceedence, kwargs={'quantile':0.666})
 c.call_distance_algorithm(func = pairwise_distances, kwargs= {'metric':'jaccard'}, n_par_processes = NPROC)
 storekwargs = c.store_dist_matrix(directory = TMPDIR)
 returnarray = c.clustering(nclusters = list(range(2,16))) # Makes sure that it has a name: clustid
-#returnarray.to_netcdf(OUTDIR / 't2m-q098.nc') # TODO: make sure that the Writer class is used here. We want coordinates with the standard dimensions encoding. 
-w = Writer(datapath = OUTDIR / 't2m-q098.nc', varname = returnarray.name)
+w = Writer(datapath = OUTDIR / 't2m-q0666.nc', varname = returnarray.name)
 w.create_dataset(example = returnarray)
 w.write(array = returnarray)
