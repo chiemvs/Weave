@@ -19,6 +19,7 @@ from scipy.stats import rankdata, spearmanr, pearsonr, weightedtau, t
 from sklearn.linear_model import LinearRegression
 from sklearn.preprocessing import scale
 from sklearn.calibration import calibration_curve
+from sklearn.metrics import confusion_matrix
 
 Region = namedtuple("Region", ["name", "latmax","lonmin", "latmin", "lonmax"])
 
@@ -409,6 +410,40 @@ def brier_score_clim(p: float) -> float:
     bs_ref = p*(p-1)**2 + (1-p)*(p-0)**2
     """
     return p*(p-1)**2 + (1-p)*p**2
+
+def max_pev(y_true, y_pred, clim_freq = None) -> float:
+    """
+    Maximum score obtainable as potential economic value (Richardson, 2000) for probabilistic forecasts
+    occurs for the c/l ratio that is equal to climatological frequency of positive (user might be fictional)
+    If forecasts are reliable this maximum is found when p_tresh is used equal to the clim_freq 
+    The whole then reduces to the kuipers score = hit_rate - false_alarm_rate
+    If clim freq is not supplied, it is inferred from true's 
+    """
+    if clim_freq is None:
+        clim_freq = float(y_true.mean())
+    bin_pred = y_pred > clim_freq # binarization p_thresh assumed equal to clim_freq 
+    tn, fp, fn, tp = confusion_matrix(y_true, bin_pred).ravel()
+    kuipers = (tp*tn - fp*fn)/((fn + tp)*(fp + tn))
+    return kuipers
+
+def pev(y_true, y_pred, p_thresh: float, cl_rat: float, clim_freq: float = None, cap_negative: bool = False) -> float:
+    """
+    Potential economic value (relative to a fixed non informative forecast)
+    Outputted for a single c/l ratio
+    Expressed as equation 8 in Richardson (2000)
+    """
+    assert max(p_thresh,cl_rat) < 1, 'Only values below one are allowed'
+    if clim_freq is None:
+        clim_freq = float(y_true.mean())
+    clim_val = min(cl_rat,clim_freq) # costs of action on (fixed) clim info only: min(costs,clim_freq*loss)
+    bin_pred = y_pred > p_thresh # binarization 
+    tn, fp, fn, tp = confusion_matrix(y_true, bin_pred).ravel()
+    hit_rate = tp/(fn+tp)
+    false_alarm = fp/(fp+tn) 
+    pev = (clim_val - false_alarm*cl_rat*(1-clim_freq) + hit_rate*clim_freq*(1-cl_rat) - clim_freq)/(clim_val - clim_freq*cl_rat)
+    if cap_negative:
+        pev = max(pev,.0)
+    return pev
 
 def reliability_plot(y_true: Union[pd.Series,pd.DataFrame], y_probs: Union[pd.Series,pd.DataFrame], nbins: int = 10, fig = None):
     """
