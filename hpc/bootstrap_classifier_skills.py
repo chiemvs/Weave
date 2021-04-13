@@ -45,9 +45,9 @@ def get_classif_score(X, y, hyperparams: dict, blocksizes: list = [None]):
     #data = np.stack([y.values,outcomes_base.values], axis = -1) # Preparing for bootstrap format
     data = np.stack([y.values,outcomes_hybrid.values], axis = -1) # Preparing for bootstrap format
     #data = np.stack([y.values,outcomes_base.values,outcomes_hybrid.values], axis = -1) # Preparing for bootstrap format, 3 columns: 0 and 1 used for base(reference) score and 0 and 2 for hybrid score
-    evaluate_kwds = dict(scores = [brier_score_loss], score_names = ['bs'])
+    #evaluate_kwds = dict(scores = [brier_score_loss], score_names = ['bs'])
     #evaluate_kwds = dict(scores = [max_pev], score_names = ['ks'])
-    #evaluate_kwds = dict(scores = [roc_auc_score], score_names = ['auc'])
+    evaluate_kwds = dict(scores = [roc_auc_score], score_names = ['auc'])
     def to_skillscore(dataarray, **evaluate_kwds):
         """
         Accepting a bootstrapped dataarray. Computes reference score from columns zero and one
@@ -65,7 +65,7 @@ def get_classif_score(X, y, hyperparams: dict, blocksizes: list = [None]):
         evaluate_decor = bootstrap(5000, return_numeric = True, blocksize = blocksize, quantile = bootstrap_quantiles)(evaluate)
         #evaluate_decor = bootstrap(5000, return_numeric = True, blocksize = blocksize, quantile = bootstrap_quantiles)(to_skillscore)
         scores[i,:] = evaluate_decor(data, **evaluate_kwds)
-    return pd.DataFrame(scores, index = pd.Index(blocksizes, name = 'blocksize'), columns = pd.Index(bootstrap_quantiles, name = 'bs_quantile'))
+    return pd.DataFrame(scores, index = pd.Index(blocksizes, name = 'blocksize'), columns = pd.Index(bootstrap_quantiles, name = 'auc_quantile'))
 
 
 params = dict(fit_base_to_all_cv = True, max_depth = 5, n_estimators = 2500, min_samples_split = 30, max_features = 35, n_jobs = NPROC)
@@ -82,11 +82,11 @@ for separation in separations:
     for timeagg in timeaggs: 
         for quantile in [0.5,0.666,0.8,0.9]:
             test = get_classif_score(*read_prepare_data(timeagg,separation,quantile), hyperparams = params, blocksizes = [None,5,15,30,60])
-            test['clim'] = brier_score_clim(quantile) # Commented out when hybrid/skillscore
+            #test['clim'] = brier_score_clim(quantile) # Commented out when hybrid/skillscore
             outcomes.append(test)
             keys.append((timeagg,separation,quantile))
 
 outcomes = pd.concat(outcomes, axis = 0, keys = keys)
 outcomes.index = outcomes.index.set_names(['timeagg','separation','threshold'] + outcomes.index.names[-1:])
-outpath = OUTPUTDIR /'.'.join([f'{key}={item}' for key,item in params.items()] + ['bs','parquet']) 
+outpath = OUTPUTDIR /'.'.join([f'{key}={item}' for key,item in params.items()] + ['auc','parquet']) 
 pq.write_table(pa.Table.from_pandas(outcomes), outpath)
