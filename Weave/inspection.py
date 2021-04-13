@@ -11,6 +11,7 @@ import numpy as np
 import pandas as pd
 import xarray as xr
 import matplotlib.pyplot as plt
+import matplotlib.colors as mcolors
 from pathlib import Path
 from typing import Union, List, Tuple
 
@@ -537,7 +538,7 @@ class MapInterface(object):
             return fig, axes
 
 
-def dotplot(df: pd.Series, custom_order: list = None, sizescaler = 50, alphascaler = 1, nlegend_items = 4):
+def dotplot(df: pd.Series, fig = None, axes = None, custom_order: list = None, sizescaler = 50, alphascaler = 1, nlegend_items = 4, color: str = 'tab:red'):
     """
     Takes a (scaled) importance df series (single variable)
     creates one panel per variable. (Custom order is possible, but variable names have to match exactly)
@@ -565,7 +566,11 @@ def dotplot(df: pd.Series, custom_order: list = None, sizescaler = 50, alphascal
     max_per_row = 3 # Maximum amount of panels per row
     nrows = int(np.ceil(len(custom_order)/max_per_row))
     ncols = min(len(custom_order),max_per_row)
-    fig, axes = plt.subplots(ncols = ncols, nrows = nrows, squeeze = False, figsize = (4*ncols,3.5 * nrows), sharex = True, sharey = True)
+    if fig is None:
+        fig, axes = plt.subplots(ncols = ncols, nrows = nrows, squeeze = False, figsize = (4*ncols,3.5 * nrows), sharex = True, sharey = True)
+        presupplied = False
+    else:
+        presupplied = True
     plotdf = df.reset_index([y_var,x_var], name = imp_var) # We need the x and y values easily accesible
     global_min = plotdf[imp_var].max() # Needs updating to the selected variables
     global_max = plotdf[imp_var].min() 
@@ -573,24 +578,30 @@ def dotplot(df: pd.Series, custom_order: list = None, sizescaler = 50, alphascal
         paneldf = plotdf.iloc[df.index.get_loc_level(key = variable, level = 'variable')[0],:] # Nice, now you don't have to know where in the levels 'variable' is to match the amount of required slice(None) in the slicing tuple
         global_min = min(global_min, paneldf[imp_var].min())
         global_max = max(global_max, paneldf[imp_var].max())
-        rgba_colors = np.zeros((len(paneldf),4),dtype = 'float64')
-        rgba_colors[:,0] = 1 # Makes it red
+        rgba_colors = np.repeat(np.array(mcolors.to_rgba(color))[np.newaxis,:],len(paneldf), axis = 0) 
         rgba_colors[:,-1] = paneldf.loc[:,imp_var] * alphascaler # first three columns: rgb color values, 4th one: alpha
         ax = axes[int(np.ceil((i+1)/max_per_row)) - 1,(i % max_per_row)]
         ax.scatter(x = paneldf[x_var], y = paneldf[y_var], s = paneldf[imp_var] * sizescaler, color = rgba_colors)
-        if (i % max_per_row) == 0:
-            ax.set_ylabel('important timeagg [days]')
-        if i >= (len(custom_order) - max_per_row):
+        if (i % max_per_row) == 0 and not presupplied:
+            ax.set_ylabel('input timescale [days]')
+        if i >= (len(custom_order) - max_per_row) and not presupplied:
             ax.set_xlabel(f'{x_var} [days]')
-        ax.set_title(f'var: {variable[:8]}')
-    fig.suptitle(title)
+        if not presupplied:
+            ax.set_title(f'var: {variable[:8]}')
+    if not presupplied:
+        fig.suptitle(title)
     # Setting up a custom legend (need to hand make the alpha/size of the labels) based on min/max of the selected variables
     if nlegend_items >= 1:
         imprange = np.round(np.linspace(global_min, global_max, num = nlegend_items), 3)
         items = [None] * len(imprange)
         for j, impval in enumerate(np.linspace(global_min, global_max, num = nlegend_items)):
-            items[j] = plt.scatter([],[], s = impval * sizescaler, color = [1,0,0,impval*alphascaler])
-        axes[-1,0].legend(items,imprange)
+            items[j] = plt.scatter([],[], s = impval * sizescaler, color = mcolors.to_rgb(color) + (impval*alphascaler,))
+        if presupplied:
+            prev_legend = axes[-1,-1].get_legend()
+            prev_imps = [text.get_text() for text in prev_legend.texts]
+            axes[-1,-1].legend(prev_legend.legendHandles + items, prev_imps + [str(imp) for imp in imprange], loc = (1.05,0))
+        else:
+            axes[-1,-1].legend(items,imprange, loc = (1.05,0))
     return fig, axes
 
 
