@@ -437,7 +437,7 @@ class MapInterface(object):
         keys = pd.MultiIndex.from_tuples(keys, names = ['fold','variable','timeagg','separation'])
         return FacetMapResult(rowkeys = keys, listofarrays = results, minimums = np.array(minimums), maximums = np.array(maximums))
 
-    def get_anoms(self, imp: Union[pd.Series, pd.DataFrame], timestamp: pd.Timestamp = None, mask_with_clustid: bool = True, correlation_too: bool = True) -> FacetMapResult:
+    def get_anoms(self, imp: Union[pd.Series, pd.DataFrame], timestamp: pd.Timestamp = None, mask_with_clustid: bool = True, mask_strict: bool = False, correlation_too: bool = True) -> FacetMapResult:
         """
         Similar to map_to_fields this method accepts properly indexed importance values 
         [variable, timeagg, separation] should be in the index.
@@ -445,6 +445,7 @@ class MapInterface(object):
         The slice is determined by the single! timestamp in the importance dataframe column
         Or by the pandas timestamp given manually. The timestamp is in terms of response time
         Has the possibility to also return the corresponding correlation pattern as a differnt array, both potentially masked with the clustids. The method will return those too.
+        Masking can also be strict, then only the clustids in the imp index will be shown
         Returns a row major list of xarray objects [[var1_anom,var1_corr,var1_clust],[var2,...]]
         Indexed by row with the pd.MultiIndex, and by column with the pd.Index (length depends on whether correlation_too and clustid_too)
         """
@@ -477,7 +478,7 @@ class MapInterface(object):
         columnkeys = ['anom', 'clustid'] 
         if correlation_too:
             columnkeys.insert(1,'correlation') # placed at first index, because like the anom (0) it will potentially be masked, and because like clustid (-1) it can be read with self.get_field
-        for key, _ in grouped: # key tuple is composed of (fold, variable, timeagg, separation)
+        for key, df in grouped: # key tuple is composed of (fold, variable, timeagg, separation)
             within_group_results = [None] * len(columnkeys)  # Will contain the anoms potentially more (forms one row in the return list) 
             within_group_results[0] = get_anom(*key[1:]) # Special function. For correlation and clustid we already have self.get_field. Fold is not neccesary here
             for extra in columnkeys[1:]:
@@ -487,8 +488,13 @@ class MapInterface(object):
                 extramap.coords.update({'fold':key[0]}) # Read the fieldfold, now give it the fold numer of the fold it belongs to.
                 within_group_results[columnkeys.index(extra)] = extramap 
             if mask_with_clustid:
-                for index in range(len(within_group_results[:-1])): # Clustid is excluded, cannot be masked with itself
-                    within_group_results[index] = within_group_results[index].where(~within_group_results[-1].isnull(), other = np.nan) # Preserve where a cluster is found. np.nan otherwise
+                if mask_strict:
+                    present_clustids = df.index.get_level_values('clustid').unique()
+                    mask = xr.concat([within_group_results[-1] == i for i in present_clustids], dim = 'bools').any(dim = 'bools') # Where true values will be retained
+                else:
+                    mask = ~within_group_results[-1].isnull() # Where true values will be retained
+                for index in range(len(within_group_results[:-1])): # Clustid is excluded from masking, cannot be masked with itself
+                    within_group_results[index] = within_group_results[index].where(mask, other = np.nan) # Preserve where a cluster is found. np.nan otherwise
 
             results.append(within_group_results)
             rowkeys.append(key) 
@@ -538,7 +544,7 @@ class MapInterface(object):
             return fig, axes
 
 
-def dotplot(df: pd.Series, fig = None, axes = None, custom_order: list = None, sizescaler = 50, alphascaler = 1, nlegend_items = 4, color: str = 'tab:red'):
+def dotplot(df: pd.Series, fig = None, axes = None, custom_order: list = None, sizescaler = 50, alphascaler = 1, fix_alpha: float = None, nlegend_items = 4, color: str = 'tab:red'):
     """
     Takes a (scaled) importance df series (single variable)
     creates one panel per variable. (Custom order is possible, but variable names have to match exactly)
@@ -579,7 +585,10 @@ def dotplot(df: pd.Series, fig = None, axes = None, custom_order: list = None, s
         global_min = min(global_min, paneldf[imp_var].min())
         global_max = max(global_max, paneldf[imp_var].max())
         rgba_colors = np.repeat(np.array(mcolors.to_rgba(color))[np.newaxis,:],len(paneldf), axis = 0) 
-        rgba_colors[:,-1] = paneldf.loc[:,imp_var] * alphascaler # first three columns: rgb color values, 4th one: alpha
+        if fix_alpha is None:
+            rgba_colors[:,-1] = paneldf.loc[:,imp_var] * alphascaler # first three columns: rgb color values, 4th one: alpha
+        else:
+            rgba_colors[:,-1] = fix_alpha # first three columns: rgb color values, 4th one: alpha
         ax = axes[int(np.ceil((i+1)/max_per_row)) - 1,(i % max_per_row)]
         ax.scatter(x = paneldf[x_var], y = paneldf[y_var], s = paneldf[imp_var] * sizescaler, color = rgba_colors)
         if (i % max_per_row) == 0 and not presupplied:
@@ -595,7 +604,10 @@ def dotplot(df: pd.Series, fig = None, axes = None, custom_order: list = None, s
         imprange = np.round(np.linspace(global_min, global_max, num = nlegend_items), 3)
         items = [None] * len(imprange)
         for j, impval in enumerate(np.linspace(global_min, global_max, num = nlegend_items)):
-            items[j] = plt.scatter([],[], s = impval * sizescaler, color = mcolors.to_rgb(color) + (impval*alphascaler,))
+            if fix_alpha is None:
+                items[j] = plt.scatter([],[], s = impval * sizescaler, color = mcolors.to_rgb(color) + (impval*alphascaler,))
+            else:
+                items[j] = plt.scatter([],[], s = impval * sizescaler, color = mcolors.to_rgb(color) + (fix_alpha,))
         if presupplied:
             prev_legend = axes[-1,-1].get_legend()
             prev_imps = [text.get_text() for text in prev_legend.texts]
@@ -791,7 +803,7 @@ def scatterplot(impdata: ImportanceData, selection: pd.DataFrame, alpha = 0.5, q
 
     return fig, axes
 
-def data_for_shapplot(impdata: ImportanceData, selection: pd.DataFrame, base_too: bool = True, fit_base: bool = True) -> dict:
+def data_for_shapplot(impdata: ImportanceData, selection: pd.DataFrame, base_too: bool = True, ignore_level = ['lag'], fit_base: bool = True) -> dict:
     """
     Function to prepare data for shap.force_plot and shap.summary_plot
     that selects X-vals accompanying the selection
@@ -820,9 +832,8 @@ def data_for_shapplot(impdata: ImportanceData, selection: pd.DataFrame, base_too
     except: # In case e.g. clustid is aggregated out
         warnings.warn('Could not find X matching the selection, indexes might not correspond, proceed without feature values')
         returndict.update(features = None)
-
-    lagpresent = 'lag' in selection.index.names 
-    selection, names, dtypes = collapse_restore_multiindex(selection, axis = 0, ignore_level = ['lag'] if lagpresent else None, inplace = False)
+    if selection.index.nlevels > 1:
+        selection, names, dtypes = collapse_restore_multiindex(selection, axis = 0, ignore_level = ignore_level, inplace = False)
     returndict.update(dict(shap_values = selection.values.T, feature_names = selection.index))
 
     return returndict 
