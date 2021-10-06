@@ -1,5 +1,5 @@
 #!/usr/bin/bash
-#SBATCH --job-name="clust06"
+#SBATCH --job-name="clust075"
 #SBATCH --nodelist=node242
 #SBATCH --cpus-per-task=30
 #SBATCH --time=03:15:00

@@ -22,6 +22,8 @@ std_dimension_formats = {
         'attrs':{'units':'dayofyear'}, 'size':366},
     'nclusters':{'encoding':{'datatype':'i4', 'fill_value':nc.default_fillvals['i4']},
         'attrs':{'units':''}},
+    'dissim_threshold':{'encoding':{'datatype':'f4', 'fill_value':nc.default_fillvals['f4']},
+        'attrs':{'units':''}},
     'clustid':{'encoding':{'datatype':'i4', 'fill_value':nc.default_fillvals['i4']},
         'attrs':{'units':''}},
     'lag':{'encoding':{'datatype':'i1', 'fill_value':nc.default_fillvals['i1']},

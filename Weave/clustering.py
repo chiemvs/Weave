@@ -327,7 +327,7 @@ class Clustering(object):
         except TypeError:
             try:
                 requestsize = len(dissimheights)
-                requestname = 'dissimheight'
+                requestname = 'dissim_threshold' # Matches with naming in Subseas code
                 logging.debug(f'levels {dissimheights} will be asked from standard scipy hierarchy. {clusterclass} should be None.')
             except TypeError:
                 requestsize = 1
