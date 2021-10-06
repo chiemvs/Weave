@@ -118,7 +118,7 @@ class PreProcessor(object):
         self.ncvarname = ncvarname
         self.datapath = datapath
         self.encoding = encoding # Dataframe defined in the downloader class, subset series for the variable.
-        self.writer = Writer(datapath= self.datapath, varname = self.encoding.name, groupname = self.operation, ncvarname = self.ncvarname, region = region)
+        self.writer = Writer(datapath= self.datapath, varname = self.encoding.name, groupname = None, ncvarname = self.ncvarname, region = region)
 
     def add_to_preprocessing_queue(self, unprocessed_dates: pd.DatetimeIndex, unprocessed_paths: List[Path]) -> None:
         """
@@ -198,12 +198,12 @@ class PreProcessor(object):
             
             # Check file time content, and make sure that we are not requested to write an existing date
             with nc.Dataset(self.datapath, mode='a') as ds:
-                times = ds[self.operation]['time'][:]
+                times = ds['time'][:]
                 if times.size == 0: # Empty timeaxis
                     presentdates = []
                     lastdate = date - pd.Timedelta(1, 'D') # Set because of possible consecitive criterium
                 else:
-                    presentdates = nc.num2date(times, units = ds[self.operation]['time'].units, calendar = ds[self.operation]['time'].calendar, only_use_cftime_datetimes = False)
+                    presentdates = nc.num2date(times, units = ds['time'].units, calendar = ds['time'].calendar, only_use_cftime_datetimes = False)
                     lastdate = pd.Timestamp(presentdates[-1])
                 writedate = date.to_pydatetime()
                 assert not (writedate in presentdates)
@@ -281,7 +281,7 @@ class DataOrganizer(object):
         """
         with nc.Dataset(self.datapath, mode='r') as ds:
             try:
-                datearray = nc.num2date(ds[self.operation]['time'][:], units = ds[self.operation]['time'].units, calendar = ds[self.operation]['time'].calendar, only_use_cftime_datetimes = False)
+                datearray = nc.num2date(ds['time'][:], units = ds['time'].units, calendar = ds['time'].calendar, only_use_cftime_datetimes = False)
                 presentdays = pd.DatetimeIndex(datearray)
             except ValueError: # then the time dimension is completely empty
                 presentdays = pd.DatetimeIndex([])
@@ -333,7 +333,7 @@ class DataOrganizer(object):
             to_download = dif.difference(foundrawdates)
             if not to_download.empty:
                 self.downloader.create_requests_and_populate_queue(downloaddates=to_download, request_kwds = {'varname':self.varname, 'region':self.region,'rawdir':self.rawdir})
-                self.results = self.downloader.start_queue(n_par_requests=7)
+                self.results = self.downloader.start_queue(n_par_requests=2)
                 
                 # Add downloaded files to the preprocessor as enter the results queue
                 while True:
