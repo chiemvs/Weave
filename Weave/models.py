@@ -20,7 +20,10 @@ from sklearn.metrics import mean_squared_error, r2_score, mean_absolute_error
 from sklearn.ensemble import RandomForestRegressor, RandomForestClassifier
 from sklearn.linear_model import LogisticRegression
 from sklearn.preprocessing import StandardScaler
-from PermutationImportance import sklearn_permutation_importance
+try:
+    from PermutationImportance import sklearn_permutation_importance
+except ImportError:
+    pass
 
 from .utils import collapse_restore_multiindex 
 
@@ -43,7 +46,7 @@ class BaseExceedenceModel(LogisticRegression):
         Scaling coefficients are estimated on the training data. Scaled it will converge and
         penalize better
         """
-        X = X.index.to_julian_date().values[:,np.newaxis]
+        X = X.index.get_level_values('time').to_julian_date().values[:,np.newaxis]
         if force: # Recalibrate the scaling coefficients
             self.scaler = StandardScaler(copy = True, with_mean = True, with_std = True)
             X = self.scaler.fit_transform(X) # leads to attributes .mean_ and .var_
