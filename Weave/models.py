@@ -530,7 +530,7 @@ def map_foldindex_to_groupedorder(X: pd.DataFrame, n_folds: int, return_foldorde
     f = crossvalidate(n_folds, True, True)(get_validation_fold_time) # sorting needs to be activated because then we how the indices line up chronologically
     foldorder = f(X_in = X, y_in = X, end_too = return_foldorder) # Extracting extra info if we want the intermediate product, creates a dataframe instead of a series
     index_to_order = pd.Series(foldorder.index.droplevel('time'), index = pd.RangeIndex(len(foldorder)))
-    X.columns.set_levels(index_to_order, level = X.columns.names.index('fold'), inplace = True)
+    X.columns = X.columns.set_levels(index_to_order, level = X.columns.names.index('fold'))
     if return_foldorder:
         foldorder.index = foldorder.index.droplevel('time')
         return foldorder.assign(fieldfold = range(n_folds)) 
