@@ -36,25 +36,25 @@ if pre1981:
 else:
     firstday = pd.Timestamp('1981-01-01')
 responseclustid = 9
-spatial_quantile = None # Set to None if you want to extract the spatial mean instead of a quantile
 detrend_response = False
 timeaggs = [1, 3, 5, 7, 11, 15, 21, 31] 
 # Response timeseries is not linked to any of the processing of the response
 # Only the starting date is important. 
 # We will make a seperate response dataframe now first
 # Only rolling aggregation is possible for intercomparing timescales, as those are equally (daily) stamped
-if spatial_quantile is None:
-    response_output = OUTDIR / '.'.join(['response','multiagg','detrended' if detrend_response else 'trended','parquet']) 
+if pre1981:
+    response_output = OUTDIR / '.'.join(['response','multiagg','detrended' if detrend_response else 'trended','pre1981','parquet']) 
 else:
-    response_output = OUTDIR / '.'.join(['response','multiagg',f'q{spatial_quantile}','detrended' if detrend_response else 'trended','parquet']) 
+    response_output = OUTDIR / '.'.join(['response','multiagg','detrended' if detrend_response else 'trended','parquet']) 
 if not response_output.exists():
     logging.debug(f'no previously existing file found at {response_output}')
-    response = xr.open_dataarray(ANOMDIR / 't2m_europe.anom.nc')
-    clusterfield = xr.open_dataarray(CLUSTERDIR / 't2m-q095.nc').sel(nclusters = 15)
-    if spatial_quantile is None:
-        reduced = response.groupby(clusterfield).mean('stacked_latitude_longitude')
+    if pre1981:
+        response = xr.open_dataarray(ANOMDIR / 't2m_europe.anom.pre1981.nc')
     else:
-        reduced = response.groupby(clusterfield).quantile(q = spatial_quantile, dim = 'stacked_latitude_longitude')
+        response = xr.open_dataarray(ANOMDIR / 't2m_europe.anom.nc')
+    clusterfield = xr.open_dataarray(CLUSTERDIR / 't2m-q095.nc').sel(nclusters = 15)
+    reduced = response.groupby(clusterfield).mean('stacked_latitude_longitude')
+
     reduced = reduced.sel(clustid = responseclustid) # In this case cluster 9 is western europe.
     response.close()
     output = []
