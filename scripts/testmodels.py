@@ -18,8 +18,8 @@ from Weave.inspection import ImportanceData, MapInterface
 logging.basicConfig(level = logging.DEBUG)
 
 quantile = 0.666
-separation = -15 
-respagg = 31 
+separation = 0 
+respagg = 7 
 #basepath = Path('/nobackup_1/users/straaten/shaptest/')
 basepath = Path('/scistor/ivm/jsn295/clusters_cv_spearmanpar_varalpha_strict/')
 Y_path = basepath / 'response.multiagg.trended.parquet'
@@ -51,8 +51,8 @@ map_foldindex_to_groupedorder(X = X_val, n_folds = 5, return_foldorder = False)
 #testi = f(X_in = y, y_in = y, end_too = True)
 
 evaluate_kwds = dict(scores = [brier_score_loss], score_names = ['bs'])
-hyperparams = dict(max_depth = [5,7,11],max_features = [20,25])
-other_kwds = dict(n_jobs = 10, n_estimators = 2500, min_samples_split = 50, fit_base_to_all_cv = False) # Whether it will fit to X_train plus X_val
+hyperparams = dict(max_depth = [4,5,7,100],min_samples_split = [2,30,100],max_features = [25,35,100])
+other_kwds = dict(n_jobs = 20, n_estimators = 2500, max_features = 20, fit_base_to_all_cv = True) # Whether it will fit to X_train plus X_val
 #other_kwds = dict(n_jobs = 10, n_estimators = 1000, min_samples_split = 30, max_features = 35, fit_base_to_all_cv = True) # Whether it will fit to X_train plus X_val
 
 """
@@ -93,7 +93,8 @@ for train_index, val_index in kf.split(X = X, groups = groups): # This generates
 
 #preds = pd.concat(preds, axis = 1)
 returns = pd.concat(returns, keys = pd.RangeIndex(n_folds, name = 'fold'))
-print(returns.mean(axis = 0))
+mean = returns.mean(axis = 0)
+returns.to_hdf(Path('/scistor/ivm/jsn295/hyperparams') / f'bs_{respagg}_{separation}_{quantile}.pre1981.h5', key = 'bs')
 
 #baseline = BaseExceedenceModel() # Most strict baseline (non-cv) that we can imagine, just for the idea of what the bs values mean
 #bs = fit_predict_evaluate(baseline, X_in = X, y_in = y, X_val = X, y_val = y, evaluate_kwds = evaluate_kwds)

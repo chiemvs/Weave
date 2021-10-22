@@ -9,6 +9,7 @@ statsmodels
 pytest
 haversine
 pyarrow
+tables
 shap
 hdbscan
 matplotlib
