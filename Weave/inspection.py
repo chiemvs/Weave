@@ -544,7 +544,7 @@ class MapInterface(object):
             return fig, axes
 
 
-def dotplot(df: pd.Series, fig = None, axes = None, custom_order: list = None, sizescaler = 50, alphascaler = 1, fix_alpha: float = None, nlegend_items = 4, color: str = 'tab:red'):
+def dotplot(df: pd.Series, fig = None, axes = None, custom_order: list = None, sizescaler = 50, alphascaler = 1, fix_alpha: float = None, nlegend_items = 4, color: str = 'tab:red', marker = 'o'):
     """
     Takes a (scaled) importance df series (single variable)
     creates one panel per variable. (Custom order is possible, but variable names have to match exactly)
@@ -590,7 +590,7 @@ def dotplot(df: pd.Series, fig = None, axes = None, custom_order: list = None, s
         else:
             rgba_colors[:,-1] = fix_alpha # first three columns: rgb color values, 4th one: alpha
         ax = axes[int(np.ceil((i+1)/max_per_row)) - 1,(i % max_per_row)]
-        ax.scatter(x = paneldf[x_var], y = paneldf[y_var], s = paneldf[imp_var] * sizescaler, color = rgba_colors)
+        ax.scatter(x = paneldf[x_var], y = paneldf[y_var], s = paneldf[imp_var] * sizescaler, color = rgba_colors, marker = marker)
         if (i % max_per_row) == 0 and not presupplied:
             ax.set_ylabel('input timescale [days]')
         if i >= (len(custom_order) - max_per_row) and not presupplied:
@@ -605,9 +605,9 @@ def dotplot(df: pd.Series, fig = None, axes = None, custom_order: list = None, s
         items = [None] * len(imprange)
         for j, impval in enumerate(np.linspace(global_min, global_max, num = nlegend_items)):
             if fix_alpha is None:
-                items[j] = plt.scatter([],[], s = impval * sizescaler, color = mcolors.to_rgb(color) + (impval*alphascaler,))
+                items[j] = plt.scatter([],[], s = impval * sizescaler, color = mcolors.to_rgb(color) + (impval*alphascaler,), marker = marker)
             else:
-                items[j] = plt.scatter([],[], s = impval * sizescaler, color = mcolors.to_rgb(color) + (fix_alpha,))
+                items[j] = plt.scatter([],[], s = impval * sizescaler, color = mcolors.to_rgb(color) + (fix_alpha,), marker = marker)
         if presupplied:
             prev_legend = axes[-1,-1].get_legend()
             prev_imps = [text.get_text() for text in prev_legend.texts]
