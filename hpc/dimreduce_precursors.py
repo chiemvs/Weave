@@ -30,7 +30,7 @@ from Weave.utils import agg_time, Region
 from Weave.dimreduction import spatcov_multilag, mean_singlelag
 
 logging.basicConfig(filename= TMPDIR / 'dimreduce_precursors.log', filemode='w', level=logging.DEBUG, format='%(process)d-%(relativeCreated)d-%(message)s')
-pre1981 = True
+pre1981 = False
 if pre1981:
     firstday = None
 else:
@@ -38,6 +38,7 @@ else:
 responseclustid = 9
 detrend_response = False
 timeaggs = [1, 3, 5, 7, 11, 15, 21, 31] 
+patternseparation = -21
 # Response timeseries is not linked to any of the processing of the response
 # Only the starting date is important. 
 # We will make a seperate response dataframe now first
@@ -46,7 +47,7 @@ if pre1981:
     response_output = OUTDIR / '.'.join(['response','multiagg','detrended' if detrend_response else 'trended','pre1981','parquet']) 
 else:
     response_output = OUTDIR / '.'.join(['response','multiagg','detrended' if detrend_response else 'trended','parquet']) 
-if not response_output.exists():
+if False: #not response_output.exists():
     logging.debug(f'no previously existing file found at {response_output}')
     if pre1981:
         response = xr.open_dataarray(ANOMDIR / 't2m_europe.anom.pre1981.nc')
@@ -77,7 +78,7 @@ if not response_output.exists():
 else:
     logging.debug(f'previously existing file found at {response_output}, do nothing')
 
-# Only rolling aggregation is possible for intercomparing timescales, as those are equally (daily) stamped
+## Only rolling aggregation is possible for intercomparing timescales, as those are equally (daily) stamped
 #files = [ f for f in PATTERNDIR.glob('*corr.nc') if f.is_file() and not (f.name[:4] == 'snow')]
 files = [ f for f in PATTERNDIR.glob('*corr.nc') if f.is_file()]
 to_reduce = ['snowc_nhmin','siconc_nhmin'] # Variables with huge files and remote clusters. Are handled differently (not stacked, but aggregated per cluster per lag)
@@ -88,9 +89,9 @@ to_reduce = ['snowc_nhmin','siconc_nhmin'] # Variables with huge files and remot
 # On that subset we call the timeaggregator and compute spatial covarianceand mean, this increases read access
 # Internal to spatcov multlilag we have the multiple lags, contained within the file, but this is not used because domains do not overlap
 if pre1981:
-    outpath = OUTDIR / '.'.join(['precursor','multiagg','pre1981','parquet']) 
+    outpath = OUTDIR / '.'.join(['precursor','multiagg',str(patternseparation),'pre1981','parquet']) 
 else:
-    outpath = OUTDIR / '.'.join(['precursor','multiagg','parquet']) 
+    outpath = OUTDIR / '.'.join(['precursor','multiagg',str(patternseparation),'parquet']) 
 
 class disk_interface(object):
     """ Disk interface to write and to read if unique combination already present """
@@ -148,9 +149,9 @@ for inputpath in files:
     filename = inputpath.parts[-1]
     variable, timeagg = filename.split('.')[:2]
     if pre1981:
-        anompath = list(ANOMDIR.glob(f'{variable}.anom.pre1981*'))[0]
+        anompath = list(ANOMDIR.glob(f'{variable}.anom.pre1981.nc'))[0]
     else:
-        anompath = list(ANOMDIR.glob(f'{variable}.anom*'))[0]
+        anompath = list(ANOMDIR.glob(f'{variable}.anom.nc'))[0]
     ds = xr.open_dataset(inputpath, decode_times = False).drop_sel(lag = 0) # Remove the simultaneous lag = 0. Information cannot be used in the models
     # Perhaps just insert a fold dimension is there is None? Then loops can always be over folds and lags. Only upon writing the frame fold column is removed if there were no original folds
     if not 'fold' in ds.dims:
@@ -160,19 +161,22 @@ for inputpath in files:
         fakefold = False
     ds.coords['fold'] = ds.coords['fold'].astype(int)
     ds.coords['lag'] = ds.coords['lag'].astype(int)
+    patternlag = patternseparation - int(timeagg) # Fixed lag at which the pattern stays
+    laglags = np.arange(- int(timeagg), patternlag -1, -1) # Lags on which we want the projection
+    ds = ds.sel(lag = [patternlag])
     def find_nunique(arr: xr.DataArray) -> xr.DataArray:
         uniques = np.unique(arr)
         nunique = len(uniques[~np.isnan(uniques)])
         return xr.DataArray(nunique, dims = ('count',), coords = {'count':[arr.name]})
     stacked = ds['clustid'].stack({'st':['lag','fold']})
     nclusters = stacked.groupby('st').apply(find_nunique).unstack('st') # 2D grouping only possible by stacking https://github.com/pydata/xarray/issues/324 
-    nclusters = nclusters.rename({'st_level_0':'lag','st_level_1':'fold'}) # groupby did not track the names
+    #nclusters = nclusters.rename({'st_level_0':'lag','st_level_1':'fold'}) # groupby did not track the names
     # Construct the unique cluster ids that have to be present per fold and lag, such that indices can be generated and we know what is missing from the outfile
     temp = nclusters.to_dataframe(name = 'nclusters').iloc[:,0] # Need to have it as a series and drop nclusters = 0
     temp = temp[temp > 0]
     logging.info(f'{len(temp)} non-empty clustid fields found for {inputpath}')
     if not temp.empty:
-        index_of_combinations = temp.groupby(['lag','fold']).apply(lambda x: pd.DataFrame(variable, columns = ['variable'], index = pd.MultiIndex.from_product([list(range(x.iloc[0])),['mean','spatcov']], names = ['clustid','metric'])))
+        index_of_combinations = temp.groupby(['fold']).apply(lambda x: pd.DataFrame(variable, columns = ['variable'], index = pd.MultiIndex.from_product([list(range(x.iloc[0])),['mean','spatcov'],laglags], names = ['clustid','metric','lag'])))
         index_of_combinations['timeagg'] = int(timeagg) 
         index_of_combinations['separation'] = index_of_combinations.index.get_level_values('lag') + index_of_combinations['timeagg'] 
         index_of_combinations = index_of_combinations.set_index(['variable','timeagg','separation'], append = True).index
@@ -213,7 +217,7 @@ for inputpath in files:
             # So now with both cases we have a stacked timeaggregated field, and unique pattern fields per lag and fold with which we can make subsets per clustid, so that is what we'll do
             for partkey in todo.droplevel('metric').drop_duplicates(): 
                 fold,_,_,lag,_,clustid = partkey
-                subset = ds.sel(lag = lag, fold = fold) # retrieving the subset needs to happen only once to then further loop over the metric combinations
+                subset = ds.sel(lag = patternlag, fold = fold) # retrieving the subset needs to happen only once to then further loop over the metric combinations
                 clustid_mask = subset['clustid'] == clustid
                 for fullkey in todo[todo.get_locs((fold,slice(None),slice(None),lag,slice(None),clustid))]:
                     _,_,_,_,_,_,metric = fullkey
