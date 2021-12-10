@@ -24,8 +24,8 @@ from typing import Union, Callable, List
 from .utils import nanquantile, get_corresponding_ctype
 from sklearn.metrics import pairwise_distances
 from sklearn.cluster import DBSCAN
-from hdbscan import HDBSCAN
 from haversine import haversine_vector
+from hdbscan import HDBSCAN
 
 class MaskingError(Exception):
     pass
@@ -332,8 +332,12 @@ class Clustering(object):
             except TypeError:
                 requestsize = 1
                 requestname = 'nclusters'
-                assert clusterclass in [DBSCAN, HDBSCAN], 'You can only refrain from specifying nclusters and dissimheigts when using (H)DBSCAN, which determines this by itself'
-                logging.debug(f'The amount of clusters will be determined by {clusterclass}.')
+                assert clusterclass in [DBSCAN, HDBSCAN, None], 'You can only refrain from specifying nclusters and dissimheigts when using (H)DBSCAN, which determines this by itself, or with hierarchical clustering, where you get the leaves'
+                if clusterclass in [DBSCAN, HDBSCAN]:
+                    logging.debug(f'The amount of clusters will be determined by {clusterclass}.')
+                else:
+                    logging.debug('Will try to return the hierarchical leaves') 
+                    only_leaves = True
 
         returnarray = np.zeros((requestsize,self.manshape[-1]), dtype = np.int16)
         if clusterclass == DBSCAN:
@@ -368,9 +372,15 @@ class Clustering(object):
             if not self.distmat.ndim == 1:
                 self.distmat = squareform(self.distmat)
             import scipy.cluster.hierarchy as sch
-            logging.debug(f'computing clusters with {sch} average linkage')
-            Z = sch.linkage(y = self.distmat, method = 'average')
-            returnarray[:] = sch.cut_tree(Z, n_clusters=nclusters, height=dissimheights).T # Either use the nclusters or the dissim heights
+            logging.debug(f'computing linkage tree with {sch} average linkage')
+            Z = sch.linkage(y = self.distmat, method = 'average', **kwargs)
+            try:
+                if only_leaves: # Request for the leaves as no clusterclass was supplied and no nclusters or dissimheights
+                    returnarray[:] = sch.leaves_list(Z)
+                else:
+                    raise NameError
+            except NameError:
+                returnarray[:] = sch.cut_tree(Z, n_clusters=nclusters, height=dissimheights).T # Either use the nclusters or the dissim heights
         
         logging.info('the clusters in sample space have been computed')
 
