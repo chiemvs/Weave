@@ -25,3 +25,4 @@ python3 $SCRIPT $TMPDIR $HOME/Documents/Weave $NPROC "${@:4}" # script, tmpstora
 #rsync -av $TMPDIR/ $HOME --exclude VENV --exclude nodelist
 cp $TMPDIR/*.log $HOME
 cp $TMPDIR/*.dat $HOME
+cp $TMPDIR/*.csv $HOME
