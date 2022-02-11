@@ -30,27 +30,31 @@ from Weave.utils import agg_time, Region
 from Weave.dimreduction import spatcov_multilag, mean_singlelag
 
 logging.basicConfig(filename= TMPDIR / 'dimreduce_precursors.log', filemode='w', level=logging.DEBUG, format='%(process)d-%(relativeCreated)d-%(message)s')
-firstday = pd.Timestamp('1981-01-01')
+pre1981 = True
+if pre1981:
+    firstday = None
+else:
+    firstday = pd.Timestamp('1981-01-01')
 responseclustid = 9
-spatial_quantile = None # Set to None if you want to extract the spatial mean instead of a quantile
 detrend_response = False
 timeaggs = [1, 3, 5, 7, 11, 15, 21, 31] 
 # Response timeseries is not linked to any of the processing of the response
 # Only the starting date is important. 
 # We will make a seperate response dataframe now first
 # Only rolling aggregation is possible for intercomparing timescales, as those are equally (daily) stamped
-if spatial_quantile is None:
-    response_output = OUTDIR / '.'.join(['response','multiagg','detrended' if detrend_response else 'trended','parquet']) 
+if pre1981:
+    response_output = OUTDIR / '.'.join(['response','multiagg','detrended' if detrend_response else 'trended','pre1981','parquet']) 
 else:
-    response_output = OUTDIR / '.'.join(['response','multiagg',f'q{spatial_quantile}','detrended' if detrend_response else 'trended','parquet']) 
+    response_output = OUTDIR / '.'.join(['response','multiagg','detrended' if detrend_response else 'trended','parquet']) 
 if not response_output.exists():
     logging.debug(f'no previously existing file found at {response_output}')
-    response = xr.open_dataarray(ANOMDIR / 't2m_europe.anom.nc')
-    clusterfield = xr.open_dataarray(CLUSTERDIR / 't2m-q095.nc').sel(nclusters = 15)
-    if spatial_quantile is None:
-        reduced = response.groupby(clusterfield).mean('stacked_latitude_longitude')
+    if pre1981:
+        response = xr.open_dataarray(ANOMDIR / 't2m_europe.anom.pre1981.nc')
     else:
-        reduced = response.groupby(clusterfield).quantile(q = spatial_quantile, dim = 'stacked_latitude_longitude')
+        response = xr.open_dataarray(ANOMDIR / 't2m_europe.anom.nc')
+    clusterfield = xr.open_dataarray(CLUSTERDIR / 't2m-q095.nc').sel(nclusters = 15)
+    reduced = response.groupby(clusterfield).mean('stacked_latitude_longitude')
+
     reduced = reduced.sel(clustid = responseclustid) # In this case cluster 9 is western europe.
     response.close()
     output = []
@@ -83,7 +87,11 @@ to_reduce = ['snowc_nhmin','siconc_nhmin'] # Variables with huge files and remot
 # The third level is then the clustids. 
 # On that subset we call the timeaggregator and compute spatial covarianceand mean, this increases read access
 # Internal to spatcov multlilag we have the multiple lags, contained within the file, but this is not used because domains do not overlap
-outpath = OUTDIR / '.'.join(['precursor','multiagg','parquet']) 
+if pre1981:
+    outpath = OUTDIR / '.'.join(['precursor','multiagg','pre1981','parquet']) 
+else:
+    outpath = OUTDIR / '.'.join(['precursor','multiagg','parquet']) 
+
 class disk_interface(object):
     """ Disk interface to write and to read if unique combination already present """
     def __init__(self, path: Path):
@@ -139,7 +147,10 @@ def actual_dimreduction(stacked_subset: xr.Dataset, clustid_mask: xr.DataArray, 
 for inputpath in files:
     filename = inputpath.parts[-1]
     variable, timeagg = filename.split('.')[:2]
-    anompath = list(ANOMDIR.glob(f'{variable}.anom*'))[0]
+    if pre1981:
+        anompath = list(ANOMDIR.glob(f'{variable}.anom.pre1981*'))[0]
+    else:
+        anompath = list(ANOMDIR.glob(f'{variable}.anom*'))[0]
     ds = xr.open_dataset(inputpath, decode_times = False).drop_sel(lag = 0) # Remove the simultaneous lag = 0. Information cannot be used in the models
     # Perhaps just insert a fold dimension is there is None? Then loops can always be over folds and lags. Only upon writing the frame fold column is removed if there were no original folds
     if not 'fold' in ds.dims:

@@ -22,6 +22,8 @@ std_dimension_formats = {
         'attrs':{'units':'dayofyear'}, 'size':366},
     'nclusters':{'encoding':{'datatype':'i4', 'fill_value':nc.default_fillvals['i4']},
         'attrs':{'units':''}},
+    'dissim_threshold':{'encoding':{'datatype':'f4', 'fill_value':nc.default_fillvals['f4']},
+        'attrs':{'units':''}},
     'clustid':{'encoding':{'datatype':'i4', 'fill_value':nc.default_fillvals['i4']},
         'attrs':{'units':''}},
     'lag':{'encoding':{'datatype':'i1', 'fill_value':nc.default_fillvals['i1']},
@@ -32,10 +34,10 @@ std_dimension_formats = {
         'attrs':{'units':''}}}
 
 variable_formats = pd.DataFrame(data = {
-    'spacing':[0.25,0.25,0.25,0.25,0.25,0.25,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.25,None,None],
-    'datatype':['i2','i2','i2','i1','i2','i2','i2','i1','i1','i1','i1','i1','i1','i1','i4','i2'],
-    'scale_factor':[10,10,0.02,0.01,0.01,0.02,0.000005,None,0.01,0.01,0.01,0.01,0.01,0.01,None,0.0001],
-    }, index = pd.Index(['z500','z300','t850','siconc','sst','t2m','transp','snowc','swvl1','swvl2','swvl3','swvl4','swvl13','tcc','clustid','correlation'], name = 'varname'))
+    'spacing':[0.25,0.25,0.25,0.25,0.25,0.25,0.25,0.25,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.25,None,None],
+    'datatype':['i2','i2','i2','i2','i2','i1','i2','i2','i2','i1','i1','i1','i1','i1','i1','i1','i4','i2'],
+    'scale_factor':[10,10,0.005,0.005,0.02,0.01,0.01,0.02,0.000005,None,0.01,0.01,0.01,0.01,0.01,0.01,None,0.0001],
+    }, index = pd.Index(['z500','z300','u300','v300','t850','siconc','sst','t2m','transp','snowc','swvl1','swvl2','swvl3','swvl4','swvl13','tcc','clustid','correlation'], name = 'varname'))
 variable_formats['fill_value'] = variable_formats['datatype'].apply(lambda s: nc.default_fillvals[s])
 
 class Writer(object):

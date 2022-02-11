@@ -21,7 +21,7 @@ PATTERNDIR = Path(sys.argv[4])
 OUTDIR = Path(sys.argv[5])
 
 sys.path.append(PACKAGEDIR)
-from Weave.models import permute_importance, compute_forest_shaps, map_foldindex_to_groupedorder, HybridExceedenceModel
+from Weave.models import permute_importance, compute_shaps, map_foldindex_to_groupedorder, HybridExceedenceModel
 
 logging.basicConfig(filename= TMPDIR / 'permimp_train_q06.log', filemode='w', level=logging.DEBUG, format='%(process)d-%(relativeCreated)d-%(message)s')
 
@@ -53,7 +53,7 @@ def execute_shap(respseptup):
         X,y = read_data(responseagg = responseagg, separation = separation, quantile = 0.666)
 
         model = HybridExceedenceModel(fit_base_to_all_cv = True, max_depth = 5, n_estimators = 2500, min_samples_split = 30, max_features = 35, n_jobs = njobs_per_imp)
-        shappies = compute_forest_shaps(model, X, y, on_validation = False, use_background = True, bg_from_training = True, sample_background = 'standard', n_folds = 5, shap_kwargs = dict(check_additivity = False))
+        shappies = compute_shaps(model, X, y, on_validation = False, use_background = True, bg_from_training = True, sample_background = 'standard', n_folds = 5, shap_kwargs = dict(check_additivity = False))
         retpath.mkdir(parents = True)
         pq.write_table(pa.Table.from_pandas(shappies), retpath / 'responsagg_separation.parquet')
         logging.debug(f'subprocess has written out SHAP frame at {retpath}')
@@ -70,7 +70,7 @@ def execute_perm_imp(respseptup):
     responseagg, separation = respseptup
     retpath = OUTDIR / str(responseagg) / str(separation)
     if not retpath.exists():
-        X,y = read_data(responseagg = responseagg, separation = separation, quantile = 0.666)
+        X,y = read_data(responseagg = responseagg, separation = separation, quantile = 0.8)
         #def wrapper(self, *args, **kwargs):
         #    return self.predict_proba(*args,**kwargs)[:,-1] # Last class is True
         #RandomForestClassifier.predict = wrapper # To avoid things inside permutation importance package  where it is only possible to invoke probabilistic prediction with twoclass y.
