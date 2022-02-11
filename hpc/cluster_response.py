@@ -18,27 +18,6 @@ sys.path.append(PACKAGEDIR)
 from Weave.clustering import Clustering, Exceedence
 from Weave.inputoutput import Writer
 
-# E-OBS part, has a very large memory footprint and thus seems to work best with 5 workers and shared reading memory
-#logging.basicConfig(filename= OBSDIR / 'eobs_cluster3D_DJF.log', filemode='w', level=logging.DEBUG, format='%(asctime)s-%(process)d-%(levelname)s-%(message)s', datefmt='%m-%d %H:%M:%S')
-#from SubSeas import observations as obs
-#o = obs.SurfaceObservations('tg')
-#o.load(tmin = '1989-01-01', tmax = '2018-12-31', llcrnr = (36,-24), rucrnr = (None,40))
-#o.minfilter(season = 'DJF', n_min_per_seas = 80)
-#o.aggregatetime(freq = '3D', method = 'mean', rolling = True)
-#
-#mask = ~ o.array[0].isnull()
-##mask[mask['latitude'] < 60,:] = False
-#
-#c = Clustering(varname = 'tg3DDJF', storedir = Path(TMPDIR))
-#c.reshape_and_drop_obs(array = o.array, season='DJF', mask=mask) # Avoid the load method of the class.
-#del o
-#c.prepare_for_distance_algorithm(where='shared', manipulator=cl.Lagshift, kwargs={'lags':list(range(-20,21))})
-#c.call_distance_algorithm(func = cl.maxcorrcoef_worker, n_par_processes = NPROC)
-#storekwargs = c.store_dist_matrix(directory = OBSDIR / '..')
-##c.distmat = np.memmap(OBSDIR / 'tg.distmat.dat', shape = (118249131,), dtype = np.float32)
-#returnarray = c.clustering(dissimheights = [0,0.005,0.01,0.025,0.05,0.1,0.15,0.2,0.3,0.4,0.5,1])
-#returnarray.to_netcdf(OBSDIR / '../paper1/tg-DJF-clustered_3D.nc')
-
 # Quantile exceedence ERA5 part, with jaccard distance, Does not need the 
 logging.basicConfig(filename= TMPDIR / 'cluster_response.log', filemode='w', level=logging.DEBUG, format='%(process)d-%(levelname)s-%(message)s')
 from sklearn.metrics import pairwise_distances

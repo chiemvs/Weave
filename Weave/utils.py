@@ -151,7 +151,7 @@ def collapse_restore_multiindex(df: Union[pd.DataFrame,pd.Series], axis: int, na
         index = pd.MultiIndex.from_tuples([tuple(string.split(separator)) for string in index.values], names = names)
         if not dtypes is None: # Restoration
             for i, dtype in enumerate(dtypes):
-                index.set_levels(index.levels[i].astype(dtype), level = i, inplace = True) # inplace here only affects the just created restoration index, not the df itself
+                index = index.set_levels(index.levels[i].astype(dtype), level = i) # inplace here only affects the just created restoration index, not the df itself
     if inplace:
         setattr(df, what, index)
         return(None, names, dtypes)
