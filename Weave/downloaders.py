@@ -14,6 +14,7 @@ import eccodes as ec
 import logging
 import multiprocessing as mp
 import time
+import re
 from pathlib import Path
 from collections import OrderedDict
 from typing import Tuple, List, Dict
@@ -30,11 +31,11 @@ class CDSDownloader(object):
         Evaporation from transformation has an ERA-Land issue and is stored under a different alias 
         """
         self.era_formats = pd.DataFrame(data = {
-            'variable':['geopotential','geopotential','u_component_of_wind','v_component_of_wind','temperature','sea_ice_cover','sea_surface_temperature','2m_temperature', 'evaporation_from_bare_soil', 'snow_cover','volumetric_soil_water_layer_1', 'volumetric_soil_water_layer_2', 'volumetric_soil_water_layer_3', 'volumetric_soil_water_layer_4','total_cloud_cover',],
-            'pressure_level':[500,300,300,300,850,None,None,None,None,None,None,None,None,None,None],
-            'setname':['reanalysis-era5-pressure-levels','reanalysis-era5-pressure-levels','reanalysis-era5-pressure-levels','reanalysis-era5-pressure-levels','reanalysis-era5-pressure-levels','reanalysis-era5-single-levels','reanalysis-era5-single-levels','reanalysis-era5-single-levels','reanalysis-era5-land','reanalysis-era5-land','reanalysis-era5-land','reanalysis-era5-land','reanalysis-era5-land','reanalysis-era5-land','reanalysis-era5-single-levels',],
-            'timevariable':['dataTime','dataTime','dataTime','dataTime','dataTime','dataTime','dataTime','dataTime','endStep','forecastTime','dataTime','dataTime','dataTime','dataTime','dataTime',], # The relevant grib parameter in the files, depends on accumulated variable and ERA-Land or not
-            }, index = pd.Index(['z500','z300','u300','v300','t850','siconc','sst','t2m','transp','snowc','swvl1','swvl2','swvl3','swvl4','tcc'], name = 'varname'))
+            'variable':['mean_top_net_long_wave_radiation_flux','geopotential','geopotential','u_component_of_wind','v_component_of_wind','temperature','sea_ice_cover','sea_surface_temperature','2m_temperature', 'evaporation_from_bare_soil', 'snow_cover','volumetric_soil_water_layer_1', 'volumetric_soil_water_layer_2', 'volumetric_soil_water_layer_3', 'volumetric_soil_water_layer_4','total_cloud_cover',],
+            'pressure_level':[None,500,300,300,300,850,None,None,None,None,None,None,None,None,None,None],
+            'setname':['reanalysis-era5-single-levels','reanalysis-era5-pressure-levels','reanalysis-era5-pressure-levels','reanalysis-era5-pressure-levels','reanalysis-era5-pressure-levels','reanalysis-era5-pressure-levels','reanalysis-era5-single-levels','reanalysis-era5-single-levels','reanalysis-era5-single-levels','reanalysis-era5-land','reanalysis-era5-land','reanalysis-era5-land','reanalysis-era5-land','reanalysis-era5-land','reanalysis-era5-land','reanalysis-era5-single-levels',],
+            'timevariable':[None,'dataTime','dataTime','dataTime','dataTime','dataTime','dataTime','dataTime','dataTime','endStep','forecastTime','dataTime','dataTime','dataTime','dataTime','dataTime',], # The relevant grib parameter in the files, depends on accumulated variable and ERA-Land or not
+            }, index = pd.Index(['olr','z500','z300','u300','v300','t850','siconc','sst','t2m','transp','snowc','swvl1','swvl2','swvl3','swvl4','tcc'], name = 'varname'))
         self.era_formats = self.era_formats.join(variable_formats, how = 'left')
     
     def create_requests_and_populate_queue(self, downloaddates: pd.DatetimeIndex, request_kwds: dict) -> list:
@@ -167,10 +168,17 @@ class PreProcessor(object):
             Returns a dictionary of the field, with endStep key, and additionally the units string
             EndStep is important in case the self.operation wants a certain timestep extracted.
             """
-            name = ec.codes_get(messageid, 'name').lower().split(' ')
-            datestamp = str(ec.codes_get(messageid, 'dataDate'))
+            name = re.split(r'[ -]',ec.codes_get(messageid, 'name').lower())
+            datestring = str(ec.codes_get(messageid, 'dataDate')) # Can be previous day, but for olr current day in combination with endStep
+            hourstring = str(ec.codes_get(messageid, 'dataTime')) 
+            if self.encoding.name ==  'olr':
+                datestamp = pd.Timestamp(year = int(datestring[:4]), month = int(datestring[4:6]), day = int(datestring[6:]), hour = int(hourstring[:-2])) 
+                endStep = ec.codes_get(messageid, 'endStep')
+                datestamp += pd.Timedelta(endStep, unit = 'hour')
+            else:
+                datestamp = pd.Timestamp(year = int(datestring[:4]), month = int(datestring[4:6]), day = int(datestring[6:]), hour = int(hourstring)) 
             assert ('_'.join(name) == self.encoding.loc['variable']) or (ec.codes_get(messageid, 'cfVarName') == self.encoding.name)
-            assert pd.Timestamp(year = int(datestamp[:4]), month = int(datestamp[4:6]), day = int(datestamp[6:])) == date # Date comes from one level up
+            assert  datestamp.date() == date.date() # Date comes from one level up
    
             # Extract the gridded values, reshape and mask.
             values = ec.codes_get_values(messageid) # One dimensional array
@@ -181,7 +189,10 @@ class PreProcessor(object):
                 
             masked_values = np.ma.MaskedArray(data = values, mask = (values == ec.codes_get(messageid, 'missingValue')))
             units = ec.codes_get(messageid, 'units')
-            timeinfo = str(ec.codes_get(messageid, self.encoding.loc['timevariable']))
+            if self.encoding.name ==  'olr':
+                timeinfo = str(datestamp.hour)
+            else:
+                timeinfo = str(ec.codes_get(messageid, self.encoding.loc['timevariable']))
             if timeinfo[-2:] == '00':
                 timeinfo = timeinfo[:-2] # Remove the trailing zeros of the minutes
             if len(timeinfo) == 1:
@@ -259,7 +270,10 @@ class DataOrganizer(object):
         """
         operation should be one of ['mean','min','max','hhUTC'] of which hh is between '00' and '24'
         """
-        self.vardir = Path('/nobackup_1/users/straaten/ERA5/' + varname)
+        if varname == 'olr':
+            self.vardir = Path('/nobackup/users/straaten/ERA5/' + varname)
+        else:
+            self.vardir = Path('/nobackup_1/users/straaten/ERA5/' + varname)
         self.rawdir = self.vardir / 'raw'
         if not self.rawdir.exists():
             self.rawdir.mkdir(parents=True)

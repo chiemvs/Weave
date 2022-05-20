@@ -65,6 +65,12 @@ def get_euratl() -> Region:
     """
     return(Region("euratl", 80, -90, 20, 30))
 
+def get_tropics() -> Region:
+    """
+    Eur-atlantic sector often used for regime computation, Cassou 2005, 20–80N, 90W–30E
+    """
+    return(Region("tropics", 30, -180, -20, 180))
+
 def get_corresponding_ctype(npdtype: type) -> type:
     simple_types = [ct.c_byte, ct.c_short, ct.c_int, ct.c_long, ct.c_longlong,
     ct.c_ubyte, ct.c_ushort, ct.c_uint, ct.c_ulong, ct.c_ulonglong,
