@@ -347,7 +347,7 @@ class DataOrganizer(object):
             to_download = dif.difference(foundrawdates)
             if not to_download.empty:
                 self.downloader.create_requests_and_populate_queue(downloaddates=to_download, request_kwds = {'varname':self.varname, 'region':self.region,'rawdir':self.rawdir})
-                self.results = self.downloader.start_queue(n_par_requests=2)
+                self.results = self.downloader.start_queue(n_par_requests=7)
                 
                 # Add downloaded files to the preprocessor as enter the results queue
                 while True:
