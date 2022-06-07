@@ -15,29 +15,29 @@ sys.path.append('..')
 from Weave.utils import get_europe, get_nhplus, get_nhmin, get_nhblock, get_nhnorm
 from Weave.downloaders import CDSDownloader, DataOrganizer, DataMerger
 
-logging.basicConfig(filename='create_swvl13.log', filemode='w', level=logging.DEBUG, format='%(process)d-%(levelname)s-%(message)s')
+logging.basicConfig(filename='create_sst.log', filemode='w', level=logging.DEBUG, format='%(process)d-%(levelname)s-%(message)s')
 #d = DataOrganizer(varname = 'z300', region = get_nhnorm(), operation = '12UTC')
 #d = DataOrganizer(varname = 't850', region = get_nhblock(), operation = '12UTC')
 #d = DataOrganizer(varname = 'transp', region = get_europe(), operation = '24UTC')
-#d = DataOrganizer(varname = 'sst', region = get_nhplus(), operation = 'mean')
+d = DataOrganizer(varname = 'sst', region = get_nhplus(), operation = 'mean')
 #d = DataOrganizer(varname = 't2m', region = get_europe(), operation = 'mean')
 #d = DataOrganizer(varname = 'siconc', region = get_nhmin(), operation = 'mean')
 #d = DataOrganizer(varname = 'snowc', region = get_nhmin(), operation = '24UTC')
 #d = DataOrganizer(varname = 'swvl4', region = get_europe(), operation = 'mean')
 #d = DataOrganizer(varname = 'tcc', region = get_europe(), operation = 'mean')
-#i = DataOrganizer(varname = 'u300', region = get_nhnorm(), operation = '12UTC')
-#j = DataOrganizer(varname = 'v300', region = get_nhnorm(), operation = '12UTC')
+#d = DataOrganizer(varname = 'u300', region = get_nhnorm(), operation = '12UTC')
+#d = DataOrganizer(varname = 'v300', region = get_nhnorm(), operation = '12UTC')
 
 """
 Replacing the name to get the preliminary back extension (for the non era5-land)
 """
-#if False:
-#    d.downloader.era_formats['setname'] = d.downloader.era_formats['setname'] + '-preliminary-back-extension'
-#    d.main(start = '1950-03-01', end = '1978-12-31')
-#elif False:
-#    d.main(start = '1979-01-01', end = '2020-10-25')
-#else:
-#    d.main(start = '1950-03-01', end = '2020-10-25')
+if False:
+    d.downloader.era_formats['setname'] = d.downloader.era_formats['setname'] + '-preliminary-back-extension'
+    d.main(start = '1950-03-01', end = '1978-12-31')
+elif False:
+    d.main(start = '1979-01-01', end = '2020-10-25')
+else:
+    d.main(start = '1950-03-01', end = '2021-10-25')
 
 """
 Merging of 'fast' soil moisture layers. based on a depth-weighted average
