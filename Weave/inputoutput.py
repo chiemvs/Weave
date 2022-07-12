@@ -172,6 +172,22 @@ class Writer(object):
                 if not hasattr(presentset[self.ncvarname], key):
                     setattr(presentset[self.ncvarname], key, attrs[key])
 
+    def write_spatial_block(self, array, latslice: slice, lonslice: slice, units: str = None):
+        """
+        Chunck based writing
+        """
+        if isinstance(array, xr.DataArray):
+            array = array.to_masked_array(copy = False)
+        else:
+            assert isinstance(array, np.ma.MaskedArray)
+
+        with nc.Dataset(self.datapath, mode='a') as presentset:
+            if isinstance(self.groupname, str):
+                presentset = presentset[self.groupname] # Move one level down
+            presentset[self.ncvarname][:,latslice,lonslice] = array
+            logging.debug(f'Writer succesfully wrote block for latindices {latslice}, lonindices {lonslice} to the netcdf')
+            if not hasattr(presentset[self.ncvarname], 'units') and not (units is None):
+                setattr(presentset[self.ncvarname], 'units',units)
 
 class Reader(object):
     """
